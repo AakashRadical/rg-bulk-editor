@@ -1,0 +1,53 @@
+node_modules/
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.shopify
+.env
+
+# Build output and temporary files
+dist/
+build/
+.tmp/
+temp/
+
+# Dependency lock files (optional, if you want to commit them, keep as is)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Shopify-specific files
+*.ngrok.io
+shopify.app.toml
+
+# Local development and testing
+coverage/
+*.test.js
+*.spec.js
+
+# macOS-specific files
+.DS_Store
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Shopify CLI temporary files
+.shopify-cli.yml
+.shopifyignore
+
+# Additional environment files
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Cache files
+.cache/
+node_cache/

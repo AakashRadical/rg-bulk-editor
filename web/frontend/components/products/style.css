@@ -1,0 +1,100 @@
+.defaultIcon {
+    height: 40px;
+    width: 40px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+.editBtn {
+    background-color: chocolate;
+}
+.title {
+    display: flex;
+    position: relative;
+    gap: 1rem;
+}
+.viewIcon {
+    display: flex;
+    gap: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+.viewIcon .viewBtn:hover {
+    fill: rgba(0, 91, 211, 1);
+}
+.viewIcon .editBtn:hover {
+    fill: rgba(0, 91, 211, 1);
+}
+.title:hover .viewIcon {
+    opacity: 1;
+}
+.Polaris-Button--disabled {
+    cursor: no-drop !important;
+    opacity: 0.5 !important;
+}
+.Polaris-Pagination__Button {
+    font-size: 12px;
+    padding: 0.25rem 0.5rem;
+    height: 32px;
+    width: 32px;
+}
+#previousURL .Polaris-Icon__Svg, #nextURL .Polaris-Icon__Svg {
+    position: relative;
+    top: 2px;
+    display: unset;
+    width: 16px !important;
+    height: 16px !important;
+}
+#previousURL, #nextURL {
+    background-color: #E3E3E3;
+    font-size: 12px;
+    padding: 0.5rem;
+    height: 25px;
+    min-height: 28px;
+    width: 25px;
+    min-width: 30px;
+    border: none;
+}
+#previousURL {
+    border-top-left-radius: 10px;
+    border-bottom-left-radius: 10px;
+}
+#nextURL {
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+#previousURL:hover, #nextURL:hover {
+    background-color: #D4D4D4;
+}
+.Polaris-Frame-Toast {
+    position: relative;
+    bottom: 3rem;
+}
+.updateBtn {
+    position: relative;
+    left: 9.6rem;
+    bottom: 0.8rem;
+    width: 100%;
+}
+.responsiveForm {
+    margin-top: 1rem;
+    width: 65rem;
+}
+.mainCard {
+    height: 430px;
+    transition: all 0.3s ease;
+    transform: scale(0.9);
+}
+.mainCard:hover {
+    transform: scale(1.01);
+}
+.cardCss {
+    padding: 3rem 4rem;
+    border-radius: 8px;
+    transition: all 0.3s ease;
+}
+.cardCss:hover {
+    background-color: antiquewhite;
+}

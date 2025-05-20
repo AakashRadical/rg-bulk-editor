@@ -1,0 +1,28 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "c9685d826c2bed4fbbc7d6dab64f9d37"
+name = "shop-temp-1"
+handle = "shop-temp-3"
+application_url = "https://aaa-ampland-drainage-billing.trycloudflare.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+dev_store_url = "dev-demosky.myshopify.com"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_orders,read_products,write_products"
+
+[auth]
+redirect_urls = [
+  "https://aaa-ampland-drainage-billing.trycloudflare.com/auth/callback",
+  "https://aaa-ampland-drainage-billing.trycloudflare.com/auth/shopify/callback",
+  "https://aaa-ampland-drainage-billing.trycloudflare.com/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-10"
+
+[pos]
+embedded = false

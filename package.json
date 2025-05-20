@@ -1,0 +1,44 @@
+{
+  "name": "rg-quick-bulk-product-editor",
+  "version": "1.0.0",
+  "main": "web/index.js",
+  "license": "UNLICENSED",
+  "scripts": {
+    "shopify": "shopify",
+    "build": "shopify app build",
+    "dev": "shopify app dev",
+    "info": "shopify app info",
+    "generate": "shopify app generate",
+    "deploy": "shopify app deploy"
+  },
+  "author": "Dell",
+  "private": true,
+  "workspaces": [
+    "extensions/*",
+    "web",
+    "web/frontend"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "eslint": "^9.15.0",
+    "prisma": "^6.8.2",
+    "typescript": "^5.6.3",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "@apollo/client": "^3.11.9",
+    "@prisma/client": "^6.8.2",
+    "@reduxjs/toolkit": "^2.3.0",
+    "@remix-run/react": "^2.12.1",
+    "@shopify/app-bridge-utils": "^3.5.1",
+    "@shopify/polaris": "^13.9.5",
+    "@shopify/polaris-icons": "^9.3.0",
+    "@shopify/shopify-api": "^11.12.0",
+    "@types/express": "^5.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "graphql": "^16.9.0",
+    "react-redux": "^9.1.2",
+    "redux-thunk": "^3.1.0"
+  }
+}
