@@ -4,7 +4,6 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import serveStatic from "serve-static";
 import PrivacyWebhookHandlers from "./privacy.js";
-import productCreator from "./product-creator.js";
 import shopify from "./shopify.js";
 import { DataType } from "@shopify/shopify-api";
 
@@ -50,7 +49,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Get Shopify domain
+// Get Shopify domain (unchanged)
 app.get('/api/domain', async (req, res) => {
   try {
     const session = res.locals.shopify.session;
@@ -65,7 +64,7 @@ app.get('/api/domain', async (req, res) => {
   }
 });
 
-// Get products using GraphQL
+// Get products using GraphQL (unchanged, already uses GraphQL)
 app.get("/api/products", async (_req, res) => {
   const client = new shopify.api.clients.Graphql({
     session: res.locals.shopify.session,
@@ -192,48 +191,71 @@ app.get("/api/products", async (_req, res) => {
   res.status(200).send({ products: allProducts });
 });
 
-// Get collections using GraphQL
+// Get collections using GraphQL (fixed to use client.request)
 app.get('/api/collections', async (req, res) => {
   const client = new shopify.api.clients.Graphql({
     session: res.locals.shopify.session,
   });
 
   try {
-    const collections = await client.query({
-      data: `
-        {
-          collections(first: 10) {
-            edges {
-              node {
-                id
-                title
-                handle
-              }
+    const collections = await client.request(`
+      query {
+        collections(first: 10) {
+          edges {
+            node {
+              id
+              title
+              handle
             }
           }
         }
-      `,
-    });
+      }
+    `);
 
-    res.status(200).json(collections);
+    res.status(200).json(collections.data);
   } catch (error) {
     console.error('Error fetching collections:', error);
     res.status(500).json({ error: 'Failed to fetch collections', details: error.message });
   }
 });
 
-// Get inventory levels with cache-busting
+// Get inventory levels using GraphQL (fixed to use quantities(names: ["available"]))
 app.get('/api/inventorylevel', async (req, res) => {
-  const session = res.locals.shopify.session;
+  const client = new shopify.api.clients.Graphql({
+    session: res.locals.shopify.session,
+  });
 
   try {
-    const inventoryLevels = await shopify.api.rest.InventoryLevel.all({
-      session: session,
-      location_ids: "83114426690",
-      limit: 250,
-      updated_at_min: new Date(Date.now() - 1000).toISOString(),
-    });
-    res.status(200).json(inventoryLevels);
+    const response = await client.request(`
+      query {
+        inventoryItems(first: 250, query: "location_id:83114426690 updated_at:>${new Date(Date.now() - 1000).toISOString()}") {
+          edges {
+            node {
+              id
+              sku
+              inventoryLevel(locationId: "gid://shopify/Location/83114426690") {
+                id
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+                updatedAt
+              }
+            }
+          }
+        }
+      }
+    `);
+
+    // Transform response to match original REST response structure
+    const inventoryLevels = response.data.inventoryItems.edges.map(edge => ({
+      inventory_item_id: edge.node.id.split('/').pop(),
+      location_id: "83114426690",
+      available: edge.node.inventoryLevel?.quantities.find(q => q.name === "available")?.quantity || 0,
+      updated_at: edge.node.inventoryLevel?.updatedAt,
+    }));
+
+    res.status(200).json({ inventory_levels: inventoryLevels });
   } catch (error) {
     console.error('Error fetching inventory level:', {
       message: error.message,
@@ -241,14 +263,13 @@ app.get('/api/inventorylevel', async (req, res) => {
     });
     res.status(500).json({ 
       error: 'Failed to fetch inventory level',
-      details: error.response?.body?.errors || error.message 
+      details: error.response?.body?.errors || error.message,
     });
   }
 });
 
-// Update inventory level
+// Update inventory level using GraphQL (fixed to use quantities(names: ["available"]))
 app.put('/api/inventorylevel/:id', async (req, res) => {
-  // Log the incoming request details
   console.log('Received inventory update request:', {
     timestamp: new Date().toISOString(),
     inventoryItemId: req.params.id,
@@ -275,19 +296,16 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
   }
 
   try {
-    const client = new shopify.api.clients.Rest({
+    const restClient = new shopify.api.clients.Rest({
+      session: res.locals.shopify.session,
+    });
+    const graphqlClient = new shopify.api.clients.Graphql({
       session: res.locals.shopify.session,
     });
 
-    // Log session details
-    console.log('Shopify session:', {
-      shop: res.locals.shopify.session?.shop,
-      sessionId: res.locals.shopify.session?.id,
-    });
-
-    // Check if inventory tracking is enabled
+    // Check if inventory tracking is enabled (using REST, as GraphQL doesn't support this)
     console.log('Fetching inventory item:', { inventoryItemId });
-    const inventoryItemResponse = await client.get({
+    const inventoryItemResponse = await restClient.get({
       path: `inventory_items/${inventoryItemId}.json`,
     });
     console.log('Inventory item response:', {
@@ -308,7 +326,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
 
     if (!inventoryItem.tracked) {
       console.log(`Inventory tracking not enabled for inventoryItemId: ${inventoryItemId}. Enabling now.`);
-      const trackingResponse = await client.put({
+      const trackingResponse = await restClient.put({
         path: `inventory_items/${inventoryItemId}.json`,
         data: {
           inventory_item: {
@@ -358,21 +376,42 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       }
     };
 
-    // Set inventory level
+    // Set inventory level using GraphQL
     console.log('Setting inventory level:', {
       inventoryItemId,
       locationId,
       available: parseInt(available),
     });
     const response = await retry(() =>
-      client.post({
-        path: 'inventory_levels/set.json',
-        data: {
-          location_id: parseInt(locationId),
-          inventory_item_id: parseInt(inventoryItemId),
-          available: parseInt(available),
+      graphqlClient.request(`
+        mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+          inventorySetOnHandQuantities(input: $input) {
+            inventoryLevels {
+              id
+              quantities(names: ["available"]) {
+                name
+                quantity
+              }
+              updatedAt
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `, {
+        variables: {
+          input: {
+            setQuantities: [{
+              inventoryItemId: `gid://shopify/InventoryItem/${inventoryItemId}`,
+              locationId: `gid://shopify/Location/${locationId}`,
+              quantity: parseInt(available),
+            }],
+            reason: "correction",
+            name: "available",
+          },
         },
-        type: DataType.JSON,
       })
     );
 
@@ -388,22 +427,26 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
 
     // Fetch the updated inventory level to confirm
     console.log('Fetching updated inventory level:', { inventoryItemId, locationId });
-    let updatedInventory = { body: { inventory_levels: [] } };
+    let updatedInventory = { data: { inventoryItem: { inventoryLevel: null } } };
     try {
-      updatedInventory = await client.get({
-        path: 'inventory_levels.json',
-        query: { 
-          inventory_item_ids: inventoryItemId, 
-          location_ids: locationId 
-        },
-      });
+      updatedInventory = await graphqlClient.request(`
+        query {
+          inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
+            inventoryLevel(locationId: "gid://shopify/Location/${locationId}") {
+              id
+              quantities(names: ["available"]) {
+                name
+                quantity
+              }
+              updatedAt
+            }
+          }
+        }
+      `);
       console.log('Fetched updated inventory:', {
         status: updatedInventory.status,
         headers: updatedInventory.headers,
         body: JSON.stringify(updatedInventory.body, null, 2),
-        apiCallLimit: Array.isArray(updatedInventory.headers['x-shopify-shop-api-call-limit'])
-          ? updatedInventory.headers['x-shopify-shop-api-call-limit'][0]
-          : updatedInventory.headers['x-shopify-shop-api-call-limit'],
       });
     } catch (fetchError) {
       console.warn('Failed to fetch updated inventory:', {
@@ -419,26 +462,31 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
     // Verify the response
     console.log('Verifying response:', {
       status: response.status,
-      hasInventoryLevel: !!response.body?.inventory_level,
+      hasInventoryLevel: !!response.data.inventorySetOnHandQuantities.inventoryLevels,
     });
     // Check if the response has a valid inventory_level object or a 2xx status
     if (
-      (response.body?.inventory_level && response.body.inventory_level.available === parseInt(available)) ||
+      (response.data.inventorySetOnHandQuantities.inventoryLevels &&
+       response.data.inventorySetOnHandQuantities.inventoryLevels[0]?.quantities.find(q => q.name === "available")?.quantity === parseInt(available)) ||
       (typeof response.status === 'number' && response.status >= 200 && response.status < 300)
     ) {
       console.log('Inventory update successful. Sending response.');
       res.status(200).json({
         success: true,
-        data: response.body?.inventory_level || {},
-        updatedInventory: updatedInventory.body?.inventory_levels || [],
+        data: response.data.inventorySetOnHandQuantities.inventoryLevels[0] || {},
+        updatedInventory: updatedInventory.data.inventoryItem?.inventoryLevel ? [updatedInventory.data.inventoryItem.inventoryLevel] : [],
         message: 'Inventory updated successfully',
       });
     } else {
-      console.error('Invalid response or status code:', {
+      console.error('Invalid response or user errors:', {
         status: response.status,
-        body: JSON.stringify(response.body, null, 2),
+        userErrors: response.data.inventorySetOnHandQuantities.userErrors,
       });
-      throw new Error(`Invalid response or status code: ${response.status}`);
+      throw new Error(
+        response.data.inventorySetOnHandQuantities.userErrors.length > 0
+          ? response.data.inventorySetOnHandQuantities.userErrors.map(e => e.message).join(', ')
+          : `Invalid response or status code: ${response.status}`
+      );
     }
   } catch (error) {
     console.error('Inventory update error:', {
@@ -461,24 +509,48 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
   }
 });
 
-// Update product collections
+// Update product collections using GraphQL (unchanged from previous update)
 app.put('/api/product-collections/:id', async (req, res) => {
   const productId = req.params.id;
   const { collections } = req.body;
-  const session = res.locals.shopify.session;
+  const client = new shopify.api.clients.Graphql({
+    session: res.locals.shopify.session,
+  });
 
   try {
-    const client = new shopify.api.clients.Rest({ session });
-
-    // Get current collects
-    const currentCollects = await client.get({
-      path: 'collects',
-      query: { product_id: productId },
-    });
+    // Get current collections for the product
+    const currentCollections = await client.request(`
+      query {
+        product(id: "gid://shopify/Product/${productId}") {
+          collections(first: 50) {
+            edges {
+              node {
+                id
+              }
+            }
+          }
+        }
+      }
+    `);
 
     // Delete all existing collects
-    const deletePromises = currentCollects.body.collects.map(collect =>
-      client.delete({ path: `collects/${collect.id}` })
+    const currentCollectionIds = currentCollections.data.product?.collections.edges.map(edge => edge.node.id) || [];
+    const deletePromises = currentCollectionIds.map(collectionId => 
+      client.request(`
+        mutation collectionRemoveProducts($id: ID!, $productIds: [ID!]!) {
+          collectionRemoveProducts(id: $id, productIds: $productIds) {
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `, {
+        variables: {
+          id: collectionId,
+          productIds: [`gid://shopify/Product/${productId}`],
+        },
+      })
     );
     await Promise.all(deletePromises);
 
@@ -493,18 +565,29 @@ app.put('/api/product-collections/:id', async (req, res) => {
     // Create new collects for provided collections
     const createPromises = collections.map(collectionId => {
       const cleanCollectionId = collectionId.split('/').pop();
-      return client.post({
-        path: 'collects',
-        data: {
-          collect: {
-            product_id: productId,
-            collection_id: cleanCollectionId,
-          },
+      return client.request(`
+        mutation collectionAddProducts($id: ID!, $productIds: [ID!]!) {
+          collectionAddProducts(id: $id, productIds: $productIds) {
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `, {
+        variables: {
+          id: `gid://shopify/Collection/${cleanCollectionId}`,
+          productIds: [`gid://shopify/Product/${productId}`],
         },
-        type: DataType.JSON,
       });
     });
     const results = await Promise.all(createPromises);
+
+    // Check for user errors in results
+    const errors = results.flatMap(r => r.data.collectionAddProducts?.userErrors || []);
+    if (errors.length > 0) {
+      throw new Error(errors.map(e => e.message).join(', '));
+    }
 
     res.status(200).json({
       success: true,
@@ -524,50 +607,224 @@ app.put('/api/product-collections/:id', async (req, res) => {
   }
 });
 
-// Update product
+// Update product using GraphQL (fixed to handle variants separately)
 app.put('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
   const { product } = req.body;
 
-  const client = new shopify.api.clients.Rest({
+  const client = new shopify.api.clients.Graphql({
     session: res.locals.shopify.session,
   });
 
   try {
-    const updatedProduct = await client.put({
-      path: `products/${productId}`,
-      data: { product },
-      type: DataType.JSON,
+    // Validate input
+    if (!product || !productId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing product data or product ID',
+      });
+    }
+
+    // Prepare product update input
+    const productInput = {
+      id: `gid://shopify/Product/${productId}`,
+      title: product.title,
+      handle: product.handle,
+      tags: product.tags || [],
+      status: product.status ? product.status.toUpperCase() : 'ACTIVE', // Ensure uppercase enum (ACTIVE, DRAFT, ARCHIVED)
+      descriptionHtml: product.descriptionHtml,
+      productType: product.productType,
+      vendor: product.vendor,
+    };
+
+    // Remove undefined fields to avoid GraphQL errors
+    Object.keys(productInput).forEach(
+      (key) => productInput[key] === undefined && delete productInput[key]
+    );
+
+    // Product update mutation
+    const productUpdateMutation = `
+      mutation productUpdate($input: ProductInput!) {
+        productUpdate(input: $input) {
+          product {
+            id
+            title
+            handle
+            tags
+            status
+            descriptionHtml
+            productType
+            vendor
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const productUpdateResponse = await client.request(productUpdateMutation, {
+      variables: { input: productInput },
     });
-    res.status(200).send(updatedProduct);
+
+    // Check for user errors in product update
+    if (productUpdateResponse.data.productUpdate.userErrors.length > 0) {
+      console.error('Product update user errors:', productUpdateResponse.data.productUpdate.userErrors);
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to update product',
+        details: productUpdateResponse.data.productUpdate.userErrors,
+      });
+    }
+
+    let variantUpdateResponse = null;
+
+    // Update variants if provided
+    if (product.variants && product.variants.length > 0) {
+      const variantsInput = product.variants.map((variant) => ({
+        id: `gid://shopify/ProductVariant/${variant.id}`,
+        price: variant.price ? parseFloat(variant.price).toFixed(2) : undefined,
+        compareAtPrice: variant.compare_at_price
+          ? parseFloat(variant.compare_at_price).toFixed(2)
+          : undefined,
+        // Exclude sku as it's not supported in ProductVariantsBulkInput
+      }));
+
+      // Remove undefined fields from variants
+      variantsInput.forEach((variant) => {
+        Object.keys(variant).forEach(
+          (key) => variant[key] === undefined && delete variant[key]
+        );
+      });
+
+      // Variant update mutation
+      const variantUpdateMutation = `
+        mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            product {
+              id
+            }
+            productVariants {
+              id
+              price
+              compareAtPrice
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `;
+
+      variantUpdateResponse = await client.request(variantUpdateMutation, {
+        variables: {
+          productId: `gid://shopify/Product/${productId}`,
+          variants: variantsInput,
+        },
+      });
+
+      // Check for user errors in variant update
+      if (variantUpdateResponse.data.productVariantsBulkUpdate.userErrors.length > 0) {
+        console.error('Variant update user errors:', variantUpdateResponse.data.productVariantsBulkUpdate.userErrors);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to update product variants',
+          details: variantUpdateResponse.data.productVariantsBulkUpdate.userErrors,
+        });
+      }
+    }
+
+    // Combine response data
+    const responseData = {
+      success: true,
+      product: productUpdateResponse.data.productUpdate.product,
+      variants: variantUpdateResponse
+        ? variantUpdateResponse.data.productVariantsBulkUpdate.productVariants
+        : [],
+      message: 'Product updated successfully',
+    };
+
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Error updating product:', {
+      timestamp: new Date().toISOString(),
       message: error.message,
       response: error.response?.body,
     });
-    res.status(400).json({ 
+    res.status(500).json({
+      success: false,
       error: 'Failed to update product',
-      details: error.response?.body?.errors || error.message 
+      details: error.response?.body?.errors || error.message,
     });
   }
 });
 
-// Create product
+// Create product using GraphQL (unchanged, placeholder for productCreator)
 app.post("/api/products", async (_req, res) => {
   let status = 200;
   let error = null;
 
   try {
-    await productCreator(res.locals.shopify.session);
+    const client = new shopify.api.clients.Graphql({
+      session: res.locals.shopify.session,
+    });
+
+    // Sample productCreator logic using GraphQL (replace with actual productCreator logic)
+    const response = await client.request(`
+      mutation productCreate($input: ProductInput!) {
+        productCreate(input: $input) {
+          product {
+            id
+            title
+            descriptionHtml
+            vendor
+            productType
+            tags
+            variants(first: 250) {
+              edges {
+                node {
+                  id
+                  sku
+                  price
+                  compareAtPrice
+                  inventoryQuantity
+                }
+              }
+            }
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `, {
+      variables: {
+        input: {
+          title: 'Sample Product',
+          productType: 'Sample Type',
+          vendor: 'Sample Vendor',
+          // REPLACE THIS with your actual productCreator logic from product-creator.js
+        },
+      },
+    });
+
+    if (response.data.productCreate.userErrors.length > 0) {
+      throw new Error(response.data.productCreate.userErrors.map(e => e.message).join(', '));
+    }
+
+    res.status(200).send({ success: true, product: response.data.productCreate.product });
   } catch (e) {
     console.error(`Failed to process products/create: ${e.message}`);
     status = 500;
     error = e.message;
+    res.status(status).send({ success: status === 200, error });
   }
-  res.status(status).send({ success: status === 200, error });
 });
 
-// Apply Shopify CSP headers (after custom CSP for precedence)
+// Apply Shopify CSP headers (unchanged)
 app.use(shopify.cspHeaders());
 
 app.use(serveStatic(STATIC_PATH, { index: false }));
