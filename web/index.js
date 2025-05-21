@@ -296,25 +296,27 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
   }
 
   try {
-    const restClient = new shopify.api.clients.Rest({
-      session: res.locals.shopify.session,
-    });
     const graphqlClient = new shopify.api.clients.Graphql({
       session: res.locals.shopify.session,
     });
 
-    // Check if inventory tracking is enabled (using REST, as GraphQL doesn't support this)
+    // Check if inventory tracking is enabled using GraphQL
     console.log('Fetching inventory item:', { inventoryItemId });
-    const inventoryItemResponse = await restClient.get({
-      path: `inventory_items/${inventoryItemId}.json`,
-    });
+    const inventoryItemResponse = await graphqlClient.request(`
+      query {
+        inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
+          id
+          tracked
+        }
+      }
+    `);
     console.log('Inventory item response:', {
       status: inventoryItemResponse.status,
       headers: inventoryItemResponse.headers,
       body: JSON.stringify(inventoryItemResponse.body, null, 2),
     });
 
-    const inventoryItem = inventoryItemResponse.body?.inventory_item;
+    const inventoryItem = inventoryItemResponse.data?.inventoryItem;
     if (!inventoryItem) {
       console.error('Inventory item not found in response:', inventoryItemResponse.body);
       return res.status(404).json({
@@ -326,21 +328,37 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
 
     if (!inventoryItem.tracked) {
       console.log(`Inventory tracking not enabled for inventoryItemId: ${inventoryItemId}. Enabling now.`);
-      const trackingResponse = await restClient.put({
-        path: `inventory_items/${inventoryItemId}.json`,
-        data: {
-          inventory_item: {
-            id: inventoryItemId,
+      const trackingResponse = await graphqlClient.request(`
+        mutation inventoryItemUpdate($id: ID!, $input: InventoryItemUpdateInput!) {
+          inventoryItemUpdate(id: $id, input: $input) {
+            inventoryItem {
+              id
+              tracked
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `, {
+        variables: {
+          id: `gid://shopify/InventoryItem/${inventoryItemId}`,
+          input: {
             tracked: true,
           },
         },
-        type: DataType.JSON,
       });
       console.log('Inventory tracking enable response:', {
         status: trackingResponse.status,
         headers: trackingResponse.headers,
         body: JSON.stringify(trackingResponse.body, null, 2),
       });
+
+      if (trackingResponse.data.inventoryItemUpdate.userErrors.length > 0) {
+        console.error('Failed to enable inventory tracking:', trackingResponse.data.inventoryItemUpdate.userErrors);
+        throw new Error(trackingResponse.data.inventoryItemUpdate.userErrors.map(e => e.message).join(', '));
+      }
     } else {
       console.log(`Inventory tracking already enabled for inventoryItemId: ${inventoryItemId}`);
     }
@@ -508,7 +526,6 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
     });
   }
 });
-
 // Update product collections using GraphQL (unchanged from previous update)
 app.put('/api/product-collections/:id', async (req, res) => {
   const productId = req.params.id;
