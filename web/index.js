@@ -247,7 +247,7 @@ app.get('/api/inventorylevel', async (req, res) => {
       }
     `);
 
-    // Transform response to match original REST response structure
+   
     const inventoryLevels = response.data.inventoryItems.edges.map(edge => ({
       inventory_item_id: edge.node.id.split('/').pop(),
       location_id: "83114426690",
@@ -270,24 +270,10 @@ app.get('/api/inventorylevel', async (req, res) => {
 
 // Update inventory level using GraphQL (fixed to use quantities(names: ["available"]))
 app.put('/api/inventorylevel/:id', async (req, res) => {
-  console.log('Received inventory update request:', {
-    timestamp: new Date().toISOString(),
-    inventoryItemId: req.params.id,
-    body: req.body,
-    headers: req.headers,
-  });
-
   const inventoryItemId = req.params.id;
   const { available, locationId = "83114426690" } = req.body;
 
-  // Validate inputs
-  console.log('Validating inputs:', { inventoryItemId, available, locationId });
   if (!inventoryItemId || available === undefined || isNaN(parseInt(available))) {
-    console.error('Input validation failed:', {
-      inventoryItemId,
-      available,
-      locationId,
-    });
     return res.status(400).json({
       success: false,
       error: 'Missing or invalid required fields',
@@ -300,9 +286,8 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       session: res.locals.shopify.session,
     });
 
-    // Check if inventory tracking is enabled using GraphQL
-    console.log('Fetching inventory item:', { inventoryItemId });
-    const inventoryItemResponse = await graphqlClient.request(`
+    // Fetch inventory item
+    const itemData = await graphqlClient.request(`
       query {
         inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
           id
@@ -310,144 +295,76 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
         }
       }
     `);
-    console.log('Inventory item response:', {
-      status: inventoryItemResponse.status,
-      headers: inventoryItemResponse.headers,
-      body: JSON.stringify(inventoryItemResponse.body, null, 2),
-    });
+    const inventoryItem = itemData?.data?.inventoryItem;
 
-    const inventoryItem = inventoryItemResponse.data?.inventoryItem;
     if (!inventoryItem) {
-      console.error('Inventory item not found in response:', inventoryItemResponse.body);
       return res.status(404).json({
         success: false,
         error: 'Inventory item not found',
-        details: inventoryItemResponse.body,
       });
     }
 
+    // Enable inventory tracking via GraphQL
     if (!inventoryItem.tracked) {
-      console.log(`Inventory tracking not enabled for inventoryItemId: ${inventoryItemId}. Enabling now.`);
-      const trackingResponse = await graphqlClient.request(`
-        mutation inventoryItemUpdate($id: ID!, $input: InventoryItemUpdateInput!) {
-          inventoryItemUpdate(id: $id, input: $input) {
-            inventoryItem {
-              id
-              tracked
-            }
+      const trackingUpdate = await graphqlClient.request(`
+        mutation {
+          inventoryItemUpdate(input: {
+            id: "gid://shopify/InventoryItem/${inventoryItemId}",
+            tracked: true
+          }) {
             userErrors {
               field
               message
             }
           }
         }
-      `, {
-        variables: {
-          id: `gid://shopify/InventoryItem/${inventoryItemId}`,
-          input: {
-            tracked: true,
-          },
-        },
-      });
-      console.log('Inventory tracking enable response:', {
-        status: trackingResponse.status,
-        headers: trackingResponse.headers,
-        body: JSON.stringify(trackingResponse.body, null, 2),
-      });
+      `);
 
-      if (trackingResponse.data.inventoryItemUpdate.userErrors.length > 0) {
-        console.error('Failed to enable inventory tracking:', trackingResponse.data.inventoryItemUpdate.userErrors);
-        throw new Error(trackingResponse.data.inventoryItemUpdate.userErrors.map(e => e.message).join(', '));
+      if (trackingUpdate?.data?.inventoryItemUpdate?.userErrors?.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to enable tracking',
+          details: trackingUpdate.data.inventoryItemUpdate.userErrors,
+        });
       }
-    } else {
-      console.log(`Inventory tracking already enabled for inventoryItemId: ${inventoryItemId}`);
     }
 
-    // Retry mechanism for API calls
-    const retry = async (fn, maxRetries = 3, delay = 1000) => {
-      for (let i = 0; i < maxRetries; i++) {
-        try {
-          console.log(`Attempt ${i + 1} of ${maxRetries} for API call`);
-          const result = await fn();
-          console.log('API call succeeded:', {
-            attempt: i + 1,
-            status: result.status,
-            headers: result.headers,
-          });
-          return result;
-        } catch (error) {
-          console.error('API call attempt failed:', {
-            attempt: i + 1,
-            errorMessage: error.message,
-            status: error.response?.status,
-            responseBody: JSON.stringify(error.response?.body, null, 2),
-            headers: error.response?.headers,
-          });
-          if (i === maxRetries - 1) throw error;
-          if (error.response?.status === 429) {
-            console.log(`Rate limit hit. Retrying after ${delay * Math.pow(2, i)}ms`);
-            await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
-          } else {
-            throw error;
+    // Update inventory quantity
+    const updateResponse = await graphqlClient.request(`
+      mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+        inventorySetOnHandQuantities(input: $input) {
+          userErrors {
+            field
+            message
           }
         }
       }
-    };
-
-    // Set inventory level using GraphQL
-    console.log('Setting inventory level:', {
-      inventoryItemId,
-      locationId,
-      available: parseInt(available),
-    });
-    const response = await retry(() =>
-      graphqlClient.request(`
-        mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
-          inventorySetOnHandQuantities(input: $input) {
-            inventoryLevels {
-              id
-              quantities(names: ["available"]) {
-                name
-                quantity
-              }
-              updatedAt
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `, {
-        variables: {
-          input: {
-            setQuantities: [{
-              inventoryItemId: `gid://shopify/InventoryItem/${inventoryItemId}`,
-              locationId: `gid://shopify/Location/${locationId}`,
-              quantity: parseInt(available),
-            }],
-            reason: "correction",
-            name: "available",
-          },
+    `, {
+      variables: {
+        input: {
+          setQuantities: [{
+            inventoryItemId: `gid://shopify/InventoryItem/${inventoryItemId}`,
+            locationId: `gid://shopify/Location/${locationId}`,
+            quantity: parseInt(available),
+          }],
+          reason: "correction",
         },
-      })
-    );
-
-    // Log the inventory set response
-    console.log('Shopify inventory set response:', {
-      status: response.status,
-      headers: response.headers,
-      body: JSON.stringify(response.body, null, 2),
-      apiCallLimit: Array.isArray(response.headers['x-shopify-shop-api-call-limit'])
-        ? response.headers['x-shopify-shop-api-call-limit'][0]
-        : response.headers['x-shopify-shop-api-call-limit'],
+      }
     });
 
-    // Fetch the updated inventory level to confirm
-    console.log('Fetching updated inventory level:', { inventoryItemId, locationId });
-    let updatedInventory = { data: { inventoryItem: { inventoryLevel: null } } };
+    const userErrors = updateResponse?.data?.inventorySetOnHandQuantities?.userErrors;
+    if (userErrors && userErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'GraphQL user error',
+        details: userErrors,
+      });
+    }
+
+    // Optional: fetch updated inventory level
+    let updatedInventory = null;
     try {
-      updatedInventory = await graphqlClient.request(`
+      const invResponse = await graphqlClient.request(`
         query {
           inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
             inventoryLevel(locationId: "gid://shopify/Location/${locationId}") {
@@ -461,71 +378,27 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
           }
         }
       `);
-      console.log('Fetched updated inventory:', {
-        status: updatedInventory.status,
-        headers: updatedInventory.headers,
-        body: JSON.stringify(updatedInventory.body, null, 2),
-      });
-    } catch (fetchError) {
-      console.warn('Failed to fetch updated inventory:', {
-        message: fetchError.message,
-        stack: fetchError.stack,
-        response: JSON.stringify(fetchError.response?.body, null, 2),
-        status: fetchError.response?.status,
-        headers: fetchError.response?.headers,
-      });
-      // Continue with response even if fetch fails
+      updatedInventory = invResponse?.data?.inventoryItem?.inventoryLevel;
+    } catch (e) {
+      console.warn("Failed to fetch updated inventory", e.message);
     }
 
-    // Verify the response
-    console.log('Verifying response:', {
-      status: response.status,
-      hasInventoryLevel: !!response.data.inventorySetOnHandQuantities.inventoryLevels,
+    return res.status(200).json({
+      success: true,
+      message: 'Inventory updated successfully',
+      updatedInventory,
     });
-    // Check if the response has a valid inventory_level object or a 2xx status
-    if (
-      (response.data.inventorySetOnHandQuantities.inventoryLevels &&
-       response.data.inventorySetOnHandQuantities.inventoryLevels[0]?.quantities.find(q => q.name === "available")?.quantity === parseInt(available)) ||
-      (typeof response.status === 'number' && response.status >= 200 && response.status < 300)
-    ) {
-      console.log('Inventory update successful. Sending response.');
-      res.status(200).json({
-        success: true,
-        data: response.data.inventorySetOnHandQuantities.inventoryLevels[0] || {},
-        updatedInventory: updatedInventory.data.inventoryItem?.inventoryLevel ? [updatedInventory.data.inventoryItem.inventoryLevel] : [],
-        message: 'Inventory updated successfully',
-      });
-    } else {
-      console.error('Invalid response or user errors:', {
-        status: response.status,
-        userErrors: response.data.inventorySetOnHandQuantities.userErrors,
-      });
-      throw new Error(
-        response.data.inventorySetOnHandQuantities.userErrors.length > 0
-          ? response.data.inventorySetOnHandQuantities.userErrors.map(e => e.message).join(', ')
-          : `Invalid response or status code: ${response.status}`
-      );
-    }
   } catch (error) {
-    console.error('Inventory update error:', {
-      timestamp: new Date().toISOString(),
-      message: error.message,
-      stack: error.stack,
-      response: JSON.stringify(error.response?.body, null, 2),
-      status: error.response?.status,
-      headers: error.response?.headers,
-    });
-
-    const status = error.response?.status || 500;
-    const errorDetails = error.response?.body?.errors || error.message;
-
-    res.status(status).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to update inventory',
-      details: errorDetails,
+      details: error.message,
     });
   }
 });
+
+
+
 // Update product collections using GraphQL (unchanged from previous update)
 app.put('/api/product-collections/:id', async (req, res) => {
   const productId = req.params.id;
