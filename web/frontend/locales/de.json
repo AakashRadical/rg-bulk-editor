@@ -9,6 +9,7 @@
   },
   "NavigationMenu": {
     "pageName": "Seitenname"
+    
   },
   "NotFound": {
     "description": "Überprüfe die URL und versuche es erneut. Alternativ kannst du die Suchleiste verwenden, um zu finden, was du suchst.",

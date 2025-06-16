@@ -4,26 +4,26 @@ import { useCallback, useEffect, useState } from 'react';
 import { checkboxCss, statusOptions } from '../utils/constants.jsx';
 
 export default function ProductForm({ product, collectionsData, onSubmit, onCancel }) {
-    const [selectedStatusOptions, setSelectedStatusOptions] = useState([]);
+    const [selectedStatusOptions, setSelectedStatusOptions] = useState([product.status]);
     const [collections, setCollections] = useState([]);
     const [selectedCollections, setSelectedCollections] = useState([]);
+    const [inputStatusValue, setInputStatusValue] = useState(product.status);
 
     const [formData, setFormData] = useState({
-        title: product.title,
-        slug: product.handle,
-        status: product.status,
-        sku: product.variants.edges[0]?.node.sku || "-",
-        salePrice: product.variants.edges[0]?.node.price || "-",
-        price: product.variants.edges[0]?.node.compareAtPrice || "-",
+        title: product.title || "-",
+        slug: product.handle || "-",
+        status: product.status || "-",
+        sku: product.variants.edges[0]?.node.sku || "",
+        salePrice: product.variants.edges[0]?.node.price || "",
+        price: product.variants.edges[0]?.node.compareAtPrice || "",
         tags: product.tags.join(', ') || "",
         inventoryQuantity: product.variants.edges[0]?.node.inventoryQuantity || 0,
         inventoryItemId: product.variants.edges[0]?.node.inventoryItem.id || "",
         collections: product.collections.edges.map(edge => edge.node.id) || []
     });
-    const [inputStatusValue, setInputStatusValue] = useState(formData.status);
+
     const [loading, setLoading] = useState(false);
 
-    // Fetch collections on component mount
     useEffect(() => {
         fetchCollections();
     }, []);
@@ -37,7 +37,6 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             }));
             setCollections(formattedCollections);
 
-            // Set initially selected collections
             const initialSelected = formattedCollections.filter(collection =>
                 formData.collections.includes(collection.id)
             );
@@ -89,25 +88,24 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
             setSelectedStatusOptions(selected);
             setInputStatusValue(selectedValue[0] || '');
+            setFormData(prev => ({ ...prev, status: selected[0] || '' }));
         },
-        [statusOptions],
+        [],
     );
 
     const handleSubmit = async (event) => {
         event.preventDefault();
         if (isNaN(parseInt(formData.inventoryQuantity))) {
-            setToastMessage("Invalid inventory quantity");
-            setToastError(true);
-            setToastActive(true);
+            console.error("Invalid inventory quantity");
             return;
         }
-    
+
         const productId = product.id.split("/").pop();
         const variantId = product.variants.edges[0]?.node.id.split("/").pop();
         const inventoryItemId = formData.inventoryItemId.split("/").pop();
-    
+
         setLoading(true);
-    
+
         try {
             await onSubmit({
                 product: {
@@ -120,8 +118,8 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                         sku: formData.sku,
                         compare_at_price: parseFloat(formData.price) || 0,
                     }],
-                    tags: formData.tags.split(',').map(tag => tag.trim()),
-                    status: inputStatusValue.toLowerCase()
+                    tags: formData.tags ? formData.tags.split(',').map(tag => tag.trim()) : [],
+                    status: formData.status.toLowerCase()
                 },
                 inventory: {
                     inventoryItemId: inventoryItemId,
@@ -179,10 +177,11 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <Text as="p" fontWeight="bold">Product Data</Text>
                         <TextField
-                            label="SKU"
+                            label="SKU *"
                             type="text"
                             value={formData.sku}
                             onChange={handleChange('sku')}
+                            required
                             fullWidth
                         />
                         <TextField
@@ -224,7 +223,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                 </div>
                 <ButtonGroup>
                     <Button icon={SendMajor} loading={loading} primary submit>Update</Button>
-                    <Button icon={CancelMinor} onClick={onCancel} reset monochrome>Cancel</Button>
+                    <Button icon={CancelMinor} onClick={onCancel} monochrome>Cancel</Button>
                 </ButtonGroup>
             </Form>
         </div>

@@ -10,7 +10,6 @@ export default function ProductProvider({ children }) {
     const { data: fetchedProducts, loading: loadingProducts } = useFetchData('/api/products');
     const { data: fetchedCollections, loading: loadingCollections } = useFetchData('/api/collections');
     const { data: fetchedInventory, loading: loadingInventory } = useFetchData('/api/inventorylevel');
-
     const isLoading = loadingProducts || loadingCollections || loadingInventory || loadingShop;
 
     const [sortSelected, setSortSelected] = useState(['title asc']);
@@ -35,6 +34,22 @@ export default function ProductProvider({ children }) {
         (currentPage - 1) * itemsPerPage,
         currentPage * itemsPerPage
     );
+
+    // Function to update a product in the state
+    const updateProduct = useCallback((updatedProduct) => {
+        setProducts((prevProducts) => {
+            const updatedProducts = prevProducts.map((product) =>
+                product.node.id === updatedProduct.node.id ? updatedProduct : product
+            );
+            return updatedProducts;
+        });
+        setFilteredProducts((prevFiltered) => {
+            const updatedFiltered = prevFiltered.map((product) =>
+                product.node.id === updatedProduct.node.id ? updatedProduct : product
+            );
+            return updatedFiltered;
+        });
+    }, []);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -232,55 +247,55 @@ export default function ProductProvider({ children }) {
     };
 
     const { selectedResources, allResourcesSelected, handleSelectionChange } = useIndexResourceState(
-            paginatedProducts, { resourceIDResolver: (product) => product.node.id,}
-        );
+        paginatedProducts, { resourceIDResolver: (product) => product.node.id }
+    );
     const handleFiltersQueryChange = useCallback((value) => setQueryValue(value), []);
 
     const tabs = itemStrings.map((item, index) => ({
-            content: item,
-            index,
-            onAction: () => {
-                setSelected(index);
-                filterProductsByTab(index);
+        content: item,
+        index,
+        onAction: () => {
+            setSelected(index);
+            filterProductsByTab(index);
+        },
+        id: `${item}-${index}`,
+        isLocked: index === 0,
+        actions: index === 0 ? [] :
+        [
+            {
+                type: 'rename',
+                onAction: () => {},
+                onPrimaryAction: async (value) => {
+                    const newItemsStrings = tabs.map((item, idx) => {
+                        if (idx === index) {
+                            return value;
+                        }
+                        return item.content;
+                    });
+                    await sleep(1);
+                    setItemStrings(newItemsStrings);
+                    return true;
+                },
             },
-            id: `${item}-${index}`,
-            isLocked: index === 0,
-            actions: index === 0 ? [] :
-            [
-                {
-                    type: 'rename',
-                    onAction: () => {},
-                    onPrimaryAction: async (value) => {
-                        const newItemsStrings = tabs.map((item, idx) => {
-                            if (idx === index) {
-                                return value;
-                            }
-                            return item.content;
-                        });
-                        await sleep(1);
-                        setItemStrings(newItemsStrings);
-                        return true;
-                    },
+            {
+                type: 'delete',
+                onPrimaryAction: async () => {
+                    await sleep(1);
+                    deleteView(index);
+                    return true;
                 },
-                {
-                    type: 'delete',
-                    onPrimaryAction: async () => {
-                        await sleep(1);
-                        deleteView(index);
-                        return true;
-                    },
-                },
-            ],
-        }));
+            },
+        ],
+    }));
 
-        const getUniqueTags = (products) => {
-            const allTags = products.reduce((acc, product) => {
-                return acc.concat(product.node.tags);
-            }, []);
-            return [...new Set(allTags)];
-        };
+    const getUniqueTags = (products) => {
+        const allTags = products.reduce((acc, product) => {
+            return acc.concat(product.node.tags);
+        }, []);
+        return [...new Set(allTags)];
+    };
 
-        const filters = [
+    const filters = [
         {
             key: "category",
             label: "Category",
@@ -349,15 +364,16 @@ export default function ProductProvider({ children }) {
             shortcut: true,
         }
     ];
+
     const handleTaggedWithRemove = useCallback(() => setTaggedWith(''), []);
-    const handleProductStatusRemove = useCallback(() => setProductStatus([]), [],);
+    const handleProductStatusRemove = useCallback(() => setProductStatus([]), []);
     const handleQueryValueRemove = useCallback(() => setQueryValue(''), []);
     const handleSelectedCategory = useCallback(() => setSelectedCategory(""), []);
     const handleSelectedGiftCard = useCallback(() => setSelectedGiftCard(false), []);
     const handleFiltersClearAll = useCallback(() => {
         setSelected(0);
         filterProductsByTab(0);
-        handleSelectedGiftCard()
+        handleSelectedGiftCard();
         handleSelectedCategory();
         handleTaggedWithRemove();
         handleQueryValueRemove();
@@ -372,63 +388,57 @@ export default function ProductProvider({ children }) {
         handleProductStatusRemove,
     ]);
 
-    function disambiguateLabel(key, value) {
-        switch (key) {
+    function isEmpty(value) {
+    if (Array.isArray(value)) {
+        return value.length === 0;
+    }
+    return value === '' || value == null;
+}
+
+  function disambiguateLabel(key, value) {
+    switch (key) {
         case 'productStatus':
             return `Product Status: ${productStatus.join(", ")}`;
         case 'taggedWith':
             return `Tagged With: ${taggedWith.join(", ")}`;
         case 'category':
-            return `Category: ${selectedCategory.join(", ")}`;
+            return `Category: ${value}`; // selectedCategory is a string, not an array
         case 'giftCard':
-            return `Gift Card: ${selectedGiftCard.join(", ")}`;
+            return `Gift Card: ${value ? "Yes" : "No"}`; // selectedGiftCard is a boolean
         default:
             return value;
-        }
     }
+}
 
-    function isEmpty(value) {
-        if (Array.isArray(value)) {
-            return value.length === 0;
-        } else {
-            return value === '' || value == null;
-        }
-    }
-
-    const appliedFilters = [];
-    if (productStatus?.length && !isEmpty(productStatus?.length)) {
-        const key = "productStatus";
-        appliedFilters.push({
-            key: "productStatus",
-            label: disambiguateLabel(key, productStatus),
-            onRemove: handleProductStatusRemove,
-        });
-    }
-    if (taggedWith?.length && !isEmpty(taggedWith)) {
-        const key = "taggedWith";
-        appliedFilters.push({
-            key,
-            label: disambiguateLabel(key, taggedWith),
-            onRemove: handleTaggedWithRemove,
-        });
-    }
-    if (selectedCategory?.length && !isEmpty(selectedCategory)) {
-        const key = "category";
-        appliedFilters.push({
-            key,
-            label: disambiguateLabel(key, selectedCategory),
-            onRemove: handleSelectedCategory,
-        });
-    }
-    if (selectedGiftCard?.length && !isEmpty(selectedGiftCard)) {
-        const key = "giftCard";
-        appliedFilters.push({
-            key,
-            label: disambiguateLabel(key, selectedGiftCard),
-            onRemove: handleSelectedGiftCard,
-        });
-    }
-
+const appliedFilters = [];
+if (productStatus?.length && !isEmpty(productStatus)) {
+    appliedFilters.push({
+        key: "productStatus",
+        label: disambiguateLabel("productStatus", productStatus),
+        onRemove: handleProductStatusRemove,
+    });
+}
+if (taggedWith?.length && !isEmpty(taggedWith)) {
+    appliedFilters.push({
+        key: "taggedWith",
+        label: disambiguateLabel("taggedWith", taggedWith),
+        onRemove: handleTaggedWithRemove,
+    });
+}
+if (selectedCategory && !isEmpty(selectedCategory)) {
+    appliedFilters.push({
+        key: "category",
+        label: disambiguateLabel("category", selectedCategory),
+        onRemove: handleSelectedCategory,
+    });
+}
+if (selectedGiftCard) { // Check boolean directly
+    appliedFilters.push({
+        key: "giftCard",
+        label: disambiguateLabel("giftCard", selectedGiftCard),
+        onRemove: handleSelectedGiftCard,
+    });
+}
     const rowMarkup = paginatedProducts.map(({ node: product }, index) => (
         <RowMarkup
             key={product.id}
@@ -439,11 +449,36 @@ export default function ProductProvider({ children }) {
             collections={fetchedCollections}
             selected={selectedResources.includes(product.id)}
             onSelect={() => handleSelectionChange(product.id)}
+            updateProduct={updateProduct} // Pass updateProduct to RowMarkup
         />
     ));
 
     const value = {
-        tabs, filters, currentPage, selected, totalPages, queryValue, sortSelected, appliedFilters, rowMarkup, primaryAction, selectedResources, allResourcesSelected, isLoading, paginatedProducts, handleNextPage, handlePreviousPage, setSortSelected, setSelected, onCreateNewView, setQueryValue, onHandleCancel, handleSelectionChange, handleFiltersQueryChange, handleFiltersClearAll
+        tabs,
+        filters,
+        currentPage,
+        selected,
+        totalPages,
+        queryValue,
+        sortSelected,
+        appliedFilters,
+        rowMarkup,
+        primaryAction,
+        selectedResources,
+        allResourcesSelected,
+        isLoading,
+        paginatedProducts,
+        handleNextPage,
+        handlePreviousPage,
+        setSortSelected,
+        setSelected,
+        onCreateNewView,
+        setQueryValue,
+        onHandleCancel,
+        handleSelectionChange,
+        handleFiltersQueryChange,
+        handleFiltersClearAll,
+        updateProduct // Add updateProduct to context value
     };
 
     return (

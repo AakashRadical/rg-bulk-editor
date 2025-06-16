@@ -5,16 +5,10 @@ import { restResources } from "@shopify/shopify-api/rest/admin/2025-04";
 
 const DB_PATH = `${process.cwd()}/database.sqlite`;
 
-// The transactions with Shopify will always be marked as test transactions, unless NODE_ENV is production.
-// See the ensureBilling helper to learn more about billing in this template.
-const billingConfig = {
-  "My Shopify One-Time Charge": {
-    // This is an example configuration that would do a one-time charge for $5 (only USD is currently supported)
-    amount: 5.0,
-    currencyCode: "USD",
-    interval: BillingInterval.OneTime,
-  },
-};
+// Shopify Managed Pricing: No custom billing config needed
+// Pricing is defined in the Partner Dashboard
+// Do NOT add 'billing' config here
+// Just ensure `unstable_managedPricingSupport` is enabled
 
 const shopify = shopifyApp({
   api: {
@@ -23,9 +17,9 @@ const shopify = shopifyApp({
     future: {
       customerAddressDefaultFix: true,
       lineItemBilling: true,
-      unstable_managedPricingSupport: true,
+      unstable_managedPricingSupport: true, // ✅ Required for managed pricing
     },
-    billing: undefined, // or replace with billingConfig above to enable example billing
+    billing: undefined, // ✅ Leave this undefined for Shopify Managed Pricing
   },
   auth: {
     path: "/api/auth",
@@ -34,8 +28,7 @@ const shopify = shopifyApp({
   webhooks: {
     path: "/api/webhooks",
   },
-  // This should be replaced with your preferred storage strategy
-  sessionStorage: new SQLiteSessionStorage(DB_PATH),
+  sessionStorage: new SQLiteSessionStorage(DB_PATH), // ✅ You can also switch to PostgreSQL/MySQL/etc.
 });
 
 export default shopify;

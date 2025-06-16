@@ -4,7 +4,7 @@ import { btn } from '../utils/constants.jsx';
 import ProductForm from './form.jsx';
 import './style.css';
 
-export default function Update({ open, product, collections, handleToggle }) {
+export default function Update({ open, product, collections, handleToggle, updateProduct }) {
     const [toastActive, setToastActive] = useState(false);
     const [toastMessage, setToastMessage] = useState("");
     const [toastError, setToastError] = useState(false);
@@ -27,7 +27,6 @@ export default function Update({ open, product, collections, handleToggle }) {
                 body: JSON.stringify({ 
                     product: {
                         ...updatedData.product,
-                        // Remove collections from product update
                         collections: undefined
                     }
                 }),
@@ -45,7 +44,7 @@ export default function Update({ open, product, collections, handleToggle }) {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
-                        collections: updatedData.collections // Empty array when no collections selected
+                        collections: updatedData.collections
                     }),
                 });
             
@@ -55,18 +54,10 @@ export default function Update({ open, product, collections, handleToggle }) {
                 }
             }
     
-            // Update inventory level if inventory data is provided
             // Update inventory level if inventory data exists
             if (updatedData.inventory && updatedData.inventory.inventoryItemId) {
-                // Clean the inventory item ID - remove 'gid://shopify/InventoryItem/' prefix if present
                 const cleanInventoryItemId = updatedData.inventory.inventoryItemId.split('/').pop();
                 
-                console.log('Sending inventory update request:', {
-                    inventoryItemId: cleanInventoryItemId,
-                    available: updatedData.inventory.available,
-                    locationId: updatedData.inventory.locationId
-                });
-
                 const inventoryResponse = await fetch(`/api/inventorylevel/${cleanInventoryItemId}`, {
                     method: 'PUT',
                     headers: {
@@ -78,9 +69,7 @@ export default function Update({ open, product, collections, handleToggle }) {
                     }),
                 });
 
-                const inventoryText = await inventoryResponse.text(); // First get the raw response text
-                console.log('Raw inventory response:', inventoryText);
-
+                const inventoryText = await inventoryResponse.text();
                 let inventoryData;
                 try {
                     inventoryData = inventoryText ? JSON.parse(inventoryText) : {};
@@ -94,11 +83,46 @@ export default function Update({ open, product, collections, handleToggle }) {
                 }
             }
     
+            // Normalize collections to handle both array and edges structure
+            const collectionEdges = collections?.edges || (Array.isArray(collections) ? collections : []);
+    
+            // Construct updated product object for context
+            const updatedProduct = {
+                node: {
+                    ...product,
+                    title: updatedData.product.title,
+                    handle: updatedData.product.handle,
+                    status: updatedData.product.status.toUpperCase(),
+                    tags: updatedData.product.tags,
+                    variants: {
+                        edges: [{
+                            node: {
+                                ...product.variants.edges[0].node,
+                                price: updatedData.product.variants[0].price.toString(),
+                                compareAtPrice: updatedData.product.variants[0].compare_at_price?.toString() || null,
+                                sku: updatedData.product.variants[0].sku,
+                                inventoryQuantity: updatedData.inventory ? parseInt(updatedData.inventory.available) : product.variants.edges[0].node.inventoryQuantity
+                            }
+                        }]
+                    },
+                    collections: {
+                        edges: updatedData.collections.map(collectionId => {
+                            const collectionNode = collectionEdges.find(c => c.node?.id === collectionId)?.node ||
+                                                  collectionEdges.find(c => c.id === collectionId) || // Handle array of nodes
+                                                  { id: collectionId, title: "" };
+                            return { node: collectionNode };
+                        })
+                    }
+                }
+            };
+
+            // Update context state
+            updateProduct(updatedProduct);
+
             setToastMessage("Product updated successfully");
             setToastError(false);
             setToastActive(true);
             handleToggle();
-    
         } catch (error) {
             console.error('Update error:', error);
             setToastMessage(error.message || "An error occurred while updating");
@@ -106,7 +130,6 @@ export default function Update({ open, product, collections, handleToggle }) {
             setToastActive(true);
         }
     };
-    
 
     return (
         <div style={btn}>

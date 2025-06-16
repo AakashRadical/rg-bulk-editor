@@ -4,13 +4,13 @@ import React, { useCallback, useState } from "react";
 import './style.css';
 import Update from "./update.jsx";
 
-export default function RowMarkup({ product, domain, index, collections, selected, onSelect }) {
+export default function RowMarkup({ product, domain, index, collections, selected, onSelect, updateProduct }) {
     const [open, setOpen] = useState(false);
 
     const title = product?.title || "-";
     const status = product?.status || "-";
     const variant = product?.variants?.edges?.[0]?.node;
-    const stock = variant.inventoryQuantity || 0;
+    const stock = variant?.inventoryQuantity || 0;
     const price = variant?.price || "-";
     const collection = product?.collections?.edges
         ?.map((collect) => collect.node.title)
@@ -19,15 +19,26 @@ export default function RowMarkup({ product, domain, index, collections, selecte
     const handle = product?.handle;
 
     let stat = null;
-    if(status === "ACTIVE") {
+    if (status === "ACTIVE") {
         stat = "success";
-    } else if(status === "DRAFT") {
+    } else if (status === "DRAFT") {
         stat = "info";
-    } else if(status === "ARCHIVED") {
+    } else if (status === "ARCHIVED") {
         stat = null;
     }
 
     const handleToggle = useCallback(() => setOpen((open) => !open), []);
+
+    const handleRowClick = useCallback((event) => {
+        if (!event || !event.target) {
+            return;
+        }
+        if (event.target.closest('.viewBtn, .editBtn')) {
+            return;
+        }
+        onSelect();
+        handleToggle();
+    }, [onSelect, handleToggle]);
 
     return (
         <>
@@ -36,7 +47,10 @@ export default function RowMarkup({ product, domain, index, collections, selecte
                 key={product.id}
                 selected={selected}
                 position={index}
-                onClick={onSelect}
+                onClick={handleToggle}
+                  aria-expanded={open}
+                 aria-controls="basic-collapsible"
+                
             >
                 <IndexTable.Cell>
                     {imageUrl !== "No Image Available" ? (
@@ -48,33 +62,36 @@ export default function RowMarkup({ product, domain, index, collections, selecte
                     )}
                 </IndexTable.Cell>
                 <IndexTable.Cell>
-                <div className="title">
-                    {title}
-                    <div className="viewIcon">
-                        <Tooltip content="Preview on Online Store">
-                            <a
-                                className="viewBtn"
-                                href={`https://${domain}/products/${handle}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label="Preview on Online Store"
-                                onClick={(event) => event.stopPropagation()}
-                            >
-                                <Icon source={ViewMinor} />
-                            </a>
-                        </Tooltip>
-                        <Tooltip content="Quick edit">
-                            <a
-                                className="editBtn"
-                                aria-expanded={open}
-                                onClick={handleToggle}
-                                aria-controls="basic-collapsible"
-                            >
-                                <Icon source={EditMinor} />
-                            </a>
-                        </Tooltip>
+                    <div className="title">
+                        {title}
+                        <div className="viewIcon">
+                            <Tooltip content="Preview on Online Store">
+                                <a
+                                    className="viewBtn"
+                                    href={`https://${domain}/products/${handle}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    aria-label="Preview on Online Store"
+                                    onClick={(event) => event.stopPropagation()}
+                                >
+                                    <Icon source={ViewMinor} />
+                                </a>
+                            </Tooltip>
+                            <Tooltip content="Quick edit">
+                                <a
+                                    className="editBtn"
+                                    aria-expanded={open}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        handleToggle();
+                                    }}
+                                    aria-controls="basic-collapsible"
+                                >
+                                    <Icon source={EditMinor} />
+                                </a>
+                            </Tooltip>
+                        </div>
                     </div>
-                </div>
                 </IndexTable.Cell>
                 <IndexTable.Cell>
                     <Badge status={stat}>
@@ -87,7 +104,13 @@ export default function RowMarkup({ product, domain, index, collections, selecte
             </IndexTable.Row>
             <tr>
                 <td colSpan="7">
-                    <Update open={open} product={product} collections={collections} handleToggle={handleToggle} />
+                    <Update
+                        open={open}
+                        product={product}
+                        collections={collections}
+                        handleToggle={handleToggle}
+                        updateProduct={updateProduct}
+                    />
                 </td>
             </tr>
         </>

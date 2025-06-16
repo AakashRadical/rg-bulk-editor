@@ -1,14 +1,24 @@
 // @ts-check
+
 import express from "express";
+
 import { readFileSync } from "fs";
+
 import { join } from "path";
+
 import serveStatic from "serve-static";
+
 import PrivacyWebhookHandlers from "./privacy.js";
+
+import productCreator from "./product-creator.js";
+
 import shopify from "./shopify.js";
+
 import { DataType } from "@shopify/shopify-api";
 
 const PORT = parseInt(
   process.env.BACKEND_PORT || process.env.PORT || "3000",
+
   10
 );
 
@@ -18,168 +28,397 @@ const STATIC_PATH =
     : `${process.cwd()}/frontend/`;
 
 const app = express();
-
-// Set up Shopify authentication and webhook handling
-app.get(shopify.config.auth.path, shopify.auth.begin());
-app.get(
-  shopify.config.auth.callbackPath,
-  shopify.auth.callback(),
-  shopify.redirectToShopifyOrAppRoot()
-);
-app.post(
-  shopify.config.webhooks.path,
-  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
-);
-
-app.use("/api/*", shopify.validateAuthenticatedSession());
 app.use(express.json());
 
-// Custom CSP middleware to ensure scripts are allowed
-app.use((req, res, next) => {
-  const csp = [
-    "default-src 'self'",
-    "script-src 'self' https://cdn.shopify.com https://painted-friends-forests-vessel.trycloudflare.com",
-    "connect-src 'self' https://painted-friends-forests-vessel.trycloudflare.com wss://painted-friends-forests-vessel.trycloudflare.com",
-    "frame-ancestors https://admin.shopify.com https://*.myshopify.com",
-    "style-src 'self' 'unsafe-inline' https://cdn.shopify.com",
-    "img-src 'self' data: https: blob:",
-  ].join("; ");
-  res.setHeader("Content-Security-Policy", csp);
-  console.log('Applied CSP headers:', csp);
-  next();
-});
+// Set up Shopify authentication and webhook handling
 
-// Get Shopify domain (unchanged)
-app.get('/api/domain', async (req, res) => {
+app.get(shopify.config.auth.path, shopify.auth.begin());
+
+app.get(
+  shopify.config.auth.callbackPath,
+
+  shopify.auth.callback(),
+
+  shopify.redirectToShopifyOrAppRoot()
+);
+
+app.post(
+  shopify.config.webhooks.path,
+
+  shopify.processWebhooks({ webhookHandlers: PrivacyWebhookHandlers })
+);
+const ensureBillingActive = async (req, res, next) => {
   try {
     const session = res.locals.shopify.session;
-    if (session && session.shop) {
-      res.status(200).json({ domain: session.shop });
+    const client = new shopify.api.clients.Rest({ session });
+
+    const response = await client.get({
+      path: "recurring_application_charges",
+    });
+
+    const activeCharge = response.body.recurring_application_charges.find(
+      (charge) => charge.status === "active"
+    );
+
+    if (!activeCharge) {
+      return res.redirect(`/pricing?shop=${session.shop}`);
+    }
+
+    next();
+  } catch (error) {
+    console.error("Plan check failed:", error);
+    return res.redirect(`/pricing?shop=${session?.shop || "unknown"}`);
+  }
+};
+
+app.get(
+  "/api/plan/check",
+  shopify.validateAuthenticatedSession(), // <-- REQUIRED!
+  async (req, res) => {
+    try {
+      const session = res.locals.shopify?.session;
+      if (!session) {
+        return res.status(401).json({ error: "No session" });
+      }
+
+      const client = new shopify.api.clients.Rest({ session });
+
+      const response = await client.get({
+        path: "recurring_application_charges",
+      });
+
+      const activeCharge = response.body.recurring_application_charges?.find(
+        (charge) => charge.status === "active"
+      );
+
+      if (activeCharge) {
+        return res.status(200).json({
+          plan: activeCharge.name,
+          status: "active",
+          charge_id: activeCharge.id,
+        });
+      } else {
+        return res.status(200).json({ plan: null, status: "inactive" });
+      }
+    } catch (error) {
+      console.error("🔥 /api/plan/check failed:", error);
+      return res.status(500).json({ error: "Plan check failed" });
+    }
+  }
+);
+
+
+
+app.use("/api/*", shopify.validateAuthenticatedSession(), ensureBillingActive);
+
+
+
+
+
+
+
+
+
+// Plan check API (optional for frontend plan fetch)
+
+
+app.get("/api/plan/confirm", async (req, res) => {
+  const session = res.locals.shopify.session;
+  const { charge_id } = req.query;
+
+  try {
+    const client = new shopify.api.clients.Rest({ session });
+
+    const result = await client.get({
+      path: `recurring_application_charges/${charge_id}`,
+    });
+
+    const charge = result.body.recurring_application_charge;
+
+    if (charge.status === "accepted") {
+      await client.post({
+        path: `recurring_application_charges/${charge_id}/activate`,
+      });
+
+      console.log(`Plan "${charge.name}" activated for ${session.shop}`);
+      res.redirect(`/?shop=${session.shop}`);
     } else {
-      res.status(404).json({ error: 'Session not found or invalid' });
+      res.redirect(`/pricing?shop=${session.shop}`);
     }
   } catch (error) {
-    console.error('Error retrieving myShopifyDomain:', error);
-    res.status(500).json({ error: 'Failed to retrieve myShopifyDomain' });
+    console.error("Billing confirmation error:", error);
+    res.redirect(`/pricing?shop=${session.shop}`);
   }
 });
 
-// Get products using GraphQL (unchanged, already uses GraphQL)
+
+// Custom CSP middleware to ensure scripts are allowed
+
+app.use((req, res, next) => {
+  const csp = [
+    "default-src 'self'",
+
+    "script-src 'self' https://cdn.shopify.com https://painted-friends-forests-vessel.trycloudflare.com",
+
+    "connect-src 'self' https://painted-friends-forests-vessel.trycloudflare.com wss://painted-friends-forests-vessel.trycloudflare.com",
+
+    "frame-ancestors https://admin.shopify.com https://*.myshopify.com",
+
+    "style-src 'self' 'unsafe-inline' https://cdn.shopify.com",
+
+    "img-src 'self' data: https: blob:",
+  ].join("; ");
+
+  res.setHeader("Content-Security-Policy", csp);
+
+  console.log("Applied CSP headers:", csp);
+
+  next();
+});
+
+
+app.get("/api/domain", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+
+    if (session && session.shop) {
+      res.status(200).json({ domain: session.shop });
+    } else {
+      res.status(404).json({ error: "Session not found or invalid" });
+    }
+  } catch (error) {
+    console.error("Error retrieving myShopifyDomain:", error);
+
+    res.status(500).json({ error: "Failed to retrieve myShopifyDomain" });
+  }
+});
+
+// Get products using GraphQL
+
 app.get("/api/products", async (_req, res) => {
   const client = new shopify.api.clients.Graphql({
     session: res.locals.shopify.session,
   });
 
   let allProducts = [];
+
   let cursor = null;
 
   do {
-    const productData = await client.request(`
+    const productData = await client.request(
+      `
+
       query($cursor: String) {
-        products(first: 50, after: $cursor) {
+
+        products(first: 10, after: $cursor) {
+
           edges {
+
             node {
+
               id
+
               title
+
               handle
+
               updatedAt
+
               isGiftCard
+
               productType
+
               descriptionHtml
+
               standardizedProductType {
+
                 productTaxonomyNode {
+
                   name
+
                   fullName
+
                 }
+
               }
+
               featuredImage {
+
                 id
+
                 originalSrc
+
               }
+
               images(first: 10) {
+
                 edges {
+
                   node {
+
                     id
+
                     originalSrc
+
                     altText
+
                     height
+
                   }
+
                 }
+
               }
+
               media(first: 10) {
+
                 edges {
+
                   node {
+
                     ... on Video {
+
                       id
+
                       sources {
+
                         url
+
                         format
+
                         height
+
                         width
+
                       }
+
                     }
+
                   }
+
                 }
+
               }
+
               variants(first: 1) {
+
                 edges {
+
                   node {
+
                     id
+
                     sku
+
                     price
+
                     compareAtPrice
+
                     inventoryQuantity
+
                     inventoryItem {
+
                       id
+
                       sku
+
                       __typename
+
                     }
+
                     metafields(namespace: "shipping", first: 3) {
+
                       edges {
+
                         node {
+
                           key
+
                           value
+
                         }
+
                       }
+
                     }
+
                   }
+
                 }
+
               }
+
               collections(first: 10) {
+
                 edges {
+
                   node {
+
                     id
+
                     title
+
                   }
+
                 }
+
               }
+
               metafields(first: 10) {
+
                 edges {
+
                   node {
+
                     id
+
                     namespace
+
                     key
+
                     value
+
                   }
+
                 }
+
               }
+
               createdAt
+
               status
+
               tags
+
               vendor
+
               __typename
+
               totalInventory
+
             }
+
             cursor
+
             __typename
+
           }
+
           pageInfo {
+
             hasNextPage
+
             endCursor
+
           }
+
         }
+
       }
-    `, { variables: { cursor } });
+
+    `,
+      { variables: { cursor } }
+    );
 
     allProducts = allProducts.concat(productData.data.products.edges);
 
@@ -191,53 +430,93 @@ app.get("/api/products", async (_req, res) => {
   res.status(200).send({ products: allProducts });
 });
 
-// Get collections using GraphQL (fixed to use client.request)
-app.get('/api/collections', async (req, res) => {
+// Get collections using GraphQL
+
+app.get("/api/collections", async (req, res) => {
   const client = new shopify.api.clients.Graphql({
     session: res.locals.shopify.session,
   });
 
   try {
-    const collections = await client.request(`
-      query {
-        collections(first: 10) {
+    const collections = await client.query({
+      data: `
+
+        {
+
+          collections(first: 10) {
+
+            edges {
+
+              node {
+
+                id
+
+                title
+
+                handle
+
+              }
+
+            }
+
+          }
+
+        }
+
+      `,
+    });
+
+    res.status(200).json(collections);
+  } catch (error) {
+    console.error("Error fetching collections:", error);
+
+    res
+      .status(500)
+      .json({ error: "Failed to fetch collections", details: error.message });
+  }
+});
+
+// Get inventory levels with cache-busting
+app.get("/api/inventorylevel", async (req, res) => {
+  const session = res.locals.shopify.session;
+
+  try {
+    const client = new shopify.api.clients.Graphql({ session });
+
+    const locationQuery = `
+      {
+        locations(first: 1) {
           edges {
             node {
               id
-              title
-              handle
             }
           }
         }
       }
-    `);
+    `;
+    const locationResponse = await client.request(locationQuery);
+    
+    const locationId = locationResponse.data?.locations?.edges?.[0]?.node?.id;
+console.log("Location ID", locationId);
+    if (!locationId) {
+      return res.status(400).json({ error: "No location ID found in shop." });
+    }
 
-    res.status(200).json(collections.data);
-  } catch (error) {
-    console.error('Error fetching collections:', error);
-    res.status(500).json({ error: 'Failed to fetch collections', details: error.message });
-  }
-});
-
-// Get inventory levels using GraphQL (fixed to use quantities(names: ["available"]))
-app.get('/api/inventorylevel', async (req, res) => {
-  const client = new shopify.api.clients.Graphql({
-    session: res.locals.shopify.session,
-  });
-
-  try {
-    const response = await client.request(`
-      query {
-        inventoryItems(first: 250, query: "location_id:83114426690 updated_at:>${new Date(Date.now() - 1000).toISOString()}") {
-          edges {
-            node {
-              id
-              sku
-              inventoryLevel(locationId: "gid://shopify/Location/83114426690") {
+    // Construct the query string with the dynamic date
+    const timeString = new Date(Date.now() - 1000).toISOString(); // ISO format
+    const inventoryQuery = `
+      {
+        location(id: "${locationId}") {
+          inventoryLevels(first: 250, query: "updated_at:>${timeString}") {
+            edges {
+              node {
                 id
                 quantities(names: ["available"]) {
                   name
                   quantity
+                }
+                item {
+                  id
                 }
                 updatedAt
               }
@@ -245,35 +524,41 @@ app.get('/api/inventorylevel', async (req, res) => {
           }
         }
       }
-    `);
+    `;
 
-   
-    const inventoryLevels = response.data.inventoryItems.edges.map(edge => ({
-      inventory_item_id: edge.node.id.split('/').pop(),
-      location_id: "83114426690",
-      available: edge.node.inventoryLevel?.quantities.find(q => q.name === "available")?.quantity || 0,
-      updated_at: edge.node.inventoryLevel?.updatedAt,
-    }));
+    const inventoryResponse = await client.request(inventoryQuery);
 
-    res.status(200).json({ inventory_levels: inventoryLevels });
+    const inventoryLevels = inventoryResponse.data?.location?.inventoryLevels?.edges?.map(edge => ({
+      id: edge.node.id,
+      available: edge.node.quantities.find(q => q.name === "available")?.quantity || 0,
+      item: edge.node.item,
+      updatedAt: edge.node.updatedAt,
+    })) || [];
+
+    res.status(200).json(inventoryLevels);
   } catch (error) {
-    console.error('Error fetching inventory level:', {
+    console.error("Error fetching inventory level:", {
       message: error.message,
       response: error.response?.body,
     });
-    res.status(500).json({ 
-      error: 'Failed to fetch inventory level',
+
+    res.status(500).json({
+      error: "Failed to fetch inventory level",
       details: error.response?.body?.errors || error.message,
     });
   }
 });
 
-// Update inventory level using GraphQL (fixed to use quantities(names: ["available"]))
+
+
+
+// Update inventory level
 app.put('/api/inventorylevel/:id', async (req, res) => {
   const inventoryItemId = req.params.id;
-  const { available, locationId = "83114426690" } = req.body;
+  const { available, locationId } = req.body;
 
-  if (!inventoryItemId || available === undefined || isNaN(parseInt(available))) {
+  // Validate all required fields
+  if (!inventoryItemId || available === undefined || isNaN(parseInt(available)) || !locationId) {
     return res.status(400).json({
       success: false,
       error: 'Missing or invalid required fields',
@@ -286,50 +571,150 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       session: res.locals.shopify.session,
     });
 
-    // Fetch inventory item
+    // Validate locationId
+    const locationQuery = await graphqlClient.request(`
+      query {
+        location(id: "gid://shopify/Location/${locationId}") {
+          id
+          name
+        }
+      }
+    `);
+    if (!locationQuery?.data?.location) {
+      console.error(`Invalid location ID: ${locationId}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid location ID',
+        details: { locationId },
+      });
+    }
+
+    // Fetch inventory item and check if stocked at location
     const itemData = await graphqlClient.request(`
       query {
         inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
           id
           tracked
+          inventoryLevel(locationId: "gid://shopify/Location/${locationId}") {
+            id
+            quantities(names: ["available"]) {
+              name
+              quantity
+            }
+          }
         }
       }
     `);
     const inventoryItem = itemData?.data?.inventoryItem;
 
     if (!inventoryItem) {
+      console.error(`Inventory item not found for ID: ${inventoryItemId}`);
       return res.status(404).json({
         success: false,
         error: 'Inventory item not found',
       });
     }
+    console.log('Inventory item:', inventoryItem);
 
-    // Enable inventory tracking via GraphQL
+    // Note: Removed inventoryItemUpdate mutation, as inventoryActivate may enable tracking
+    // If explicit tracking is required, uncomment and adjust the following:
+    /*
     if (!inventoryItem.tracked) {
+      console.log(`Enabling tracking for item ${inventoryItemId}`);
       const trackingUpdate = await graphqlClient.request(`
-        mutation {
-          inventoryItemUpdate(input: {
-            id: "gid://shopify/InventoryItem/${inventoryItemId}",
-            tracked: true
-          }) {
+        mutation inventoryItemPatch($input: InventoryItemInput!) {
+          inventoryItemPatch(input: $input) {
+            inventoryItem {
+              id
+              tracked
+            }
             userErrors {
               field
               message
             }
           }
         }
-      `);
+      `, {
+        variables: {
+          input: {
+            id: `gid://shopify/InventoryItem/${inventoryItemId}`,
+            tracked: true
+          }
+        }
+      });
 
-      if (trackingUpdate?.data?.inventoryItemUpdate?.userErrors?.length > 0) {
+      console.log('Tracking update response:', JSON.stringify(trackingUpdate, null, 2));
+
+      if (trackingUpdate?.data?.inventoryItemPatch?.userErrors?.length > 0) {
+        console.error('Tracking update errors:', trackingUpdate.data.inventoryItemPatch.userErrors);
         return res.status(400).json({
           success: false,
           error: 'Failed to enable tracking',
-          details: trackingUpdate.data.inventoryItemUpdate.userErrors,
+          details: trackingUpdate.data.inventoryItemPatch.userErrors,
+        });
+      }
+
+      if (!trackingUpdate?.data?.inventoryItemPatch?.inventoryItem) {
+        console.error('Tracking update failed, no inventory item returned');
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to enable tracking',
+          details: 'No inventory item returned from mutation',
+        });
+      }
+    }
+    */
+
+    // Activate inventory at location if not stocked
+    if (!inventoryItem.inventoryLevel) {
+      console.log(`Activating inventory for item ${inventoryItemId} at location ${locationId}`);
+      const activateResponse = await graphqlClient.request(`
+        mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+          inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+            inventoryLevel {
+              id
+              quantities(names: ["available"]) {
+                name
+                quantity
+              }
+            }
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `, {
+        variables: {
+          inventoryItemId: `gid://shopify/InventoryItem/${inventoryItemId}`,
+          locationId: `gid://shopify/Location/${locationId}`,
+        },
+      });
+
+      console.log('Inventory activate response:', JSON.stringify(activateResponse, null, 2));
+
+      const activateErrors = activateResponse?.data?.inventoryActivate?.userErrors;
+      if (activateErrors && activateErrors.length > 0) {
+        console.error('Inventory activation errors:', activateErrors);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to activate inventory at location',
+          details: activateErrors,
+        });
+      }
+
+      if (!activateResponse?.data?.inventoryActivate?.inventoryLevel) {
+        console.error('Inventory activation failed, no inventory level returned');
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to activate inventory at location',
+          details: 'No inventory level returned from mutation',
         });
       }
     }
 
     // Update inventory quantity
+    console.log(`Updating inventory for item ${inventoryItemId} at location ${locationId} to ${available}`);
     const updateResponse = await graphqlClient.request(`
       mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
         inventorySetOnHandQuantities(input: $input) {
@@ -354,6 +739,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
 
     const userErrors = updateResponse?.data?.inventorySetOnHandQuantities?.userErrors;
     if (userErrors && userErrors.length > 0) {
+      console.error('Inventory update errors:', userErrors);
       return res.status(400).json({
         success: false,
         error: 'GraphQL user error',
@@ -389,6 +775,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       updatedInventory,
     });
   } catch (error) {
+    console.error('Inventory update error:', error.message);
     return res.status(500).json({
       success: false,
       error: 'Failed to update inventory',
@@ -397,22 +784,26 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
   }
 });
 
-
-
-// Update product collections using GraphQL (unchanged from previous update)
-app.put('/api/product-collections/:id', async (req, res) => {
+// Update product collections
+app.put("/api/product-collections/:id", async (req, res) => {
   const productId = req.params.id;
   const { collections } = req.body;
-  const client = new shopify.api.clients.Graphql({
-    session: res.locals.shopify.session,
-  });
+  const session = res.locals.shopify.session;
 
   try {
-    // Get current collections for the product
-    const currentCollections = await client.request(`
+    const client = new shopify.api.clients.Graphql({ session });
+
+    // Ensure productId is in GraphQL ID format
+    const formattedProductId = productId.startsWith('gid://shopify/Product/')
+      ? productId
+      : `gid://shopify/Product/${productId}`;
+
+    // Get current collects
+    const collectQuery = `
       query {
-        product(id: "gid://shopify/Product/${productId}") {
-          collections(first: 50) {
+        product(id: "${formattedProductId}") {
+          id
+          collections(first: 250) {
             edges {
               node {
                 id
@@ -421,185 +812,22 @@ app.put('/api/product-collections/:id', async (req, res) => {
           }
         }
       }
-    `);
-
-    // Delete all existing collects
-    const currentCollectionIds = currentCollections.data.product?.collections.edges.map(edge => edge.node.id) || [];
-    const deletePromises = currentCollectionIds.map(collectionId => 
-      client.request(`
-        mutation collectionRemoveProducts($id: ID!, $productIds: [ID!]!) {
-          collectionRemoveProducts(id: $id, productIds: $productIds) {
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `, {
-        variables: {
-          id: collectionId,
-          productIds: [`gid://shopify/Product/${productId}`],
-        },
-      })
-    );
-    await Promise.all(deletePromises);
-
-    // If collections array is empty, all collects are removed
-    if (collections && collections.length === 0) {
-      return res.status(200).json({
-        success: true,
-        message: 'All collections removed from the product.',
-      });
-    }
-
-    // Create new collects for provided collections
-    const createPromises = collections.map(collectionId => {
-      const cleanCollectionId = collectionId.split('/').pop();
-      return client.request(`
-        mutation collectionAddProducts($id: ID!, $productIds: [ID!]!) {
-          collectionAddProducts(id: $id, productIds: $productIds) {
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `, {
-        variables: {
-          id: `gid://shopify/Collection/${cleanCollectionId}`,
-          productIds: [`gid://shopify/Product/${productId}`],
-        },
-      });
-    });
-    const results = await Promise.all(createPromises);
-
-    // Check for user errors in results
-    const errors = results.flatMap(r => r.data.collectionAddProducts?.userErrors || []);
-    if (errors.length > 0) {
-      throw new Error(errors.map(e => e.message).join(', '));
-    }
-
-    res.status(200).json({
-      success: true,
-      message: 'Collections updated successfully.',
-      results,
-    });
-  } catch (error) {
-    console.error('Error updating collections:', {
-      message: error.message,
-      response: error.response?.body,
-    });
-    res.status(500).json({
-      success: false,
-      error: 'Failed to update collections',
-      details: error.response?.body?.errors || error.message,
-    });
-  }
-});
-
-// Update product using GraphQL (fixed to handle variants separately)
-app.put('/api/products/:id', async (req, res) => {
-  const productId = req.params.id;
-  const { product } = req.body;
-
-  const client = new shopify.api.clients.Graphql({
-    session: res.locals.shopify.session,
-  });
-
-  try {
-    // Validate input
-    if (!product || !productId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing product data or product ID',
-      });
-    }
-
-    // Prepare product update input
-    const productInput = {
-      id: `gid://shopify/Product/${productId}`,
-      title: product.title,
-      handle: product.handle,
-      tags: product.tags || [],
-      status: product.status ? product.status.toUpperCase() : 'ACTIVE', // Ensure uppercase enum (ACTIVE, DRAFT, ARCHIVED)
-      descriptionHtml: product.descriptionHtml,
-      productType: product.productType,
-      vendor: product.vendor,
-    };
-
-    // Remove undefined fields to avoid GraphQL errors
-    Object.keys(productInput).forEach(
-      (key) => productInput[key] === undefined && delete productInput[key]
-    );
-
-    // Product update mutation
-    const productUpdateMutation = `
-      mutation productUpdate($input: ProductInput!) {
-        productUpdate(input: $input) {
-          product {
-            id
-            title
-            handle
-            tags
-            status
-            descriptionHtml
-            productType
-            vendor
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
     `;
 
-    const productUpdateResponse = await client.request(productUpdateMutation, {
-      variables: { input: productInput },
-    });
+    const currentCollectsResponse = await client.request(collectQuery);
 
-    // Check for user errors in product update
-    if (productUpdateResponse.data.productUpdate.userErrors.length > 0) {
-      console.error('Product update user errors:', productUpdateResponse.data.productUpdate.userErrors);
-      return res.status(400).json({
-        success: false,
-        error: 'Failed to update product',
-        details: productUpdateResponse.data.productUpdate.userErrors,
-      });
+    // Check if product exists
+    if (!currentCollectsResponse.data?.product) {
+      throw new Error(`Product with ID ${productId} not found`);
     }
 
-    let variantUpdateResponse = null;
+    const currentCollects = currentCollectsResponse.data?.product?.collections?.edges?.map(edge => edge.node) || [];
 
-    // Update variants if provided
-    if (product.variants && product.variants.length > 0) {
-      const variantsInput = product.variants.map((variant) => ({
-        id: `gid://shopify/ProductVariant/${variant.id}`,
-        price: variant.price ? parseFloat(variant.price).toFixed(2) : undefined,
-        compareAtPrice: variant.compare_at_price
-          ? parseFloat(variant.compare_at_price).toFixed(2)
-          : undefined,
-        // Exclude sku as it's not supported in ProductVariantsBulkInput
-      }));
-
-      // Remove undefined fields from variants
-      variantsInput.forEach((variant) => {
-        Object.keys(variant).forEach(
-          (key) => variant[key] === undefined && delete variant[key]
-        );
-      });
-
-      // Variant update mutation
-      const variantUpdateMutation = `
-        mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-            product {
-              id
-            }
-            productVariants {
-              id
-              price
-              compareAtPrice
-            }
+    // Delete all existing collects
+    const deletePromises = currentCollects.map((collect) => {
+      const deleteMutation = `
+        mutation {
+          collectionRemoveProducts(id: "${collect.id}", productIds: ["${formattedProductId}"]) {
             userErrors {
               field
               message
@@ -607,125 +835,160 @@ app.put('/api/products/:id', async (req, res) => {
           }
         }
       `;
-
-      variantUpdateResponse = await client.request(variantUpdateMutation, {
-        variables: {
-          productId: `gid://shopify/Product/${productId}`,
-          variants: variantsInput,
-        },
+      return client.request(deleteMutation).catch((err) => {
+        console.error(`Failed to remove product from collection ${collect.id}:`, err.message);
+        throw err;
       });
+    });
 
-      // Check for user errors in variant update
-      if (variantUpdateResponse.data.productVariantsBulkUpdate.userErrors.length > 0) {
-        console.error('Variant update user errors:', variantUpdateResponse.data.productVariantsBulkUpdate.userErrors);
-        return res.status(400).json({
-          success: false,
-          error: 'Failed to update product variants',
-          details: variantUpdateResponse.data.productVariantsBulkUpdate.userErrors,
-        });
-      }
+    await Promise.all(deletePromises);
+
+    // If collections array is empty, all collects are removed
+    if (collections && collections.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: "All collections removed from the product.",
+      });
     }
 
-    // Combine response data
-    const responseData = {
-      success: true,
-      product: productUpdateResponse.data.productUpdate.product,
-      variants: variantUpdateResponse
-        ? variantUpdateResponse.data.productVariantsBulkUpdate.productVariants
-        : [],
-      message: 'Product updated successfully',
-    };
+    // Create new collects for provided collections
+    const createPromises = collections.map((collectionId) => {
+      const cleanCollectionId = collectionId.split("/").pop();
+      const formattedCollectionId = cleanCollectionId.startsWith('gid://shopify/Collection/')
+        ? cleanCollectionId
+        : `gid://shopify/Collection/${cleanCollectionId}`;
+      const createMutation = `
+        mutation {
+          collectionAddProducts(id: "${formattedCollectionId}", productIds: ["${formattedProductId}"]) {
+            userErrors {
+              field
+              message
+            }
+          }
+        }
+      `;
+      return client.request(createMutation).catch((err) => {
+        console.error(`Failed to add product to collection ${cleanCollectionId}:`, err.message);
+        throw err;
+      });
+    });
 
-    res.status(200).json(responseData);
+    const results = await Promise.all(createPromises);
+
+    res.status(200).json({
+      success: true,
+      message: "Collections updated successfully.",
+      results,
+    });
   } catch (error) {
-    console.error('Error updating product:', {
-      timestamp: new Date().toISOString(),
+    console.error("Error updating collections:", {
       message: error.message,
       response: error.response?.body,
+      stack: error.stack,
     });
+
     res.status(500).json({
       success: false,
-      error: 'Failed to update product',
+      error: "Failed to update collections",
       details: error.response?.body?.errors || error.message,
     });
   }
 });
+// Update product
+// product route
 
-// Create product using GraphQL (unchanged, placeholder for productCreator)
+app.put('/api/products/:id', async (req, res) => {
+
+  const productId = req.params.id;
+
+  const { product } = req.body;
+
+
+
+  const client = new shopify.api.clients.Rest({
+
+    session: res.locals.shopify.session,
+
+  });
+
+
+
+  try {
+
+    const updatedProduct = await client.put({
+
+      path: `products/${productId}`,
+
+      data: { product },
+
+      type: DataType.JSON,
+
+    });
+
+    res.status(200).send(updatedProduct);
+
+  } catch (error) {
+
+    console.error('Error updating product:', {
+
+      message: error.message,
+
+      response: error.response?.body,
+
+    });
+
+    res.status(400).json({
+
+      error: 'Failed to update product',
+
+      details: error.response?.body?.errors || error.message
+
+    });
+
+  }
+
+});
+
+
+
+
+// Create product
+
 app.post("/api/products", async (_req, res) => {
   let status = 200;
+
   let error = null;
 
   try {
-    const client = new shopify.api.clients.Graphql({
-      session: res.locals.shopify.session,
-    });
-
-    // Sample productCreator logic using GraphQL (replace with actual productCreator logic)
-    const response = await client.request(`
-      mutation productCreate($input: ProductInput!) {
-        productCreate(input: $input) {
-          product {
-            id
-            title
-            descriptionHtml
-            vendor
-            productType
-            tags
-            variants(first: 250) {
-              edges {
-                node {
-                  id
-                  sku
-                  price
-                  compareAtPrice
-                  inventoryQuantity
-                }
-              }
-            }
-          }
-          userErrors {
-            field
-            message
-          }
-        }
-      }
-    `, {
-      variables: {
-        input: {
-          title: 'Sample Product',
-          productType: 'Sample Type',
-          vendor: 'Sample Vendor',
-          // REPLACE THIS with your actual productCreator logic from product-creator.js
-        },
-      },
-    });
-
-    if (response.data.productCreate.userErrors.length > 0) {
-      throw new Error(response.data.productCreate.userErrors.map(e => e.message).join(', '));
-    }
-
-    res.status(200).send({ success: true, product: response.data.productCreate.product });
+    await productCreator(res.locals.shopify.session);
   } catch (e) {
     console.error(`Failed to process products/create: ${e.message}`);
+
     status = 500;
+
     error = e.message;
-    res.status(status).send({ success: status === 200, error });
   }
+
+  res.status(status).send({ success: status === 200, error });
 });
 
-// Apply Shopify CSP headers (unchanged)
+// Apply Shopify CSP headers (after custom CSP for precedence)
+
 app.use(shopify.cspHeaders());
 
 app.use(serveStatic(STATIC_PATH, { index: false }));
 
 app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res, _next) => {
   return res
+
     .status(200)
+
     .set("Content-Type", "text/html")
+
     .send(
       readFileSync(join(STATIC_PATH, "index.html"))
         .toString()
+
         .replace("%VITE_SHOPIFY_API_KEY%", process.env.SHOPIFY_API_KEY || "")
     );
 });
