@@ -171,10 +171,9 @@ app.use((req, res, next) => {
 
   res.setHeader("Content-Security-Policy", csp);
 
-  console.log("Applied CSP headers:", csp);
+  // console.log("Applied CSP headers:", csp);
 
-  next();
-});
+  next();});
 
 
 app.get("/api/domain", async (req, res) => {
@@ -555,14 +554,13 @@ console.log("Location ID", locationId);
 // Update inventory level
 app.put('/api/inventorylevel/:id', async (req, res) => {
   const inventoryItemId = req.params.id;
-  const { available, locationId } = req.body;
+  const { available, locationId, sku } = req.body;
 
-  // Validate all required fields
-  if (!inventoryItemId || available === undefined || isNaN(parseInt(available)) || !locationId) {
+  if (!inventoryItemId || available === undefined || isNaN(parseInt(available)) || !locationId || !sku) {
     return res.status(400).json({
       success: false,
       error: 'Missing or invalid required fields',
-      details: { inventoryItemId, locationId, available },
+      details: { inventoryItemId, locationId, available, sku },
     });
   }
 
@@ -571,7 +569,6 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       session: res.locals.shopify.session,
     });
 
-    // Validate locationId
     const locationQuery = await graphqlClient.request(`
       query {
         location(id: "gid://shopify/Location/${locationId}") {
@@ -589,12 +586,14 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       });
     }
 
-    // Fetch inventory item and check if stocked at location
     const itemData = await graphqlClient.request(`
       query {
         inventoryItem(id: "gid://shopify/InventoryItem/${inventoryItemId}") {
           id
           tracked
+          variant {
+            sku
+          }
           inventoryLevel(locationId: "gid://shopify/Location/${locationId}") {
             id
             quantities(names: ["available"]) {
@@ -614,58 +613,27 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
         error: 'Inventory item not found',
       });
     }
+
+    if (inventoryItem.variant?.sku !== sku) {
+      console.error(`Invalid SKU: ${sku} does not match inventory item SKU: ${inventoryItem.variant?.sku}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid SKU',
+        details: { providedSku: sku, expectedSku: inventoryItem.variant?.sku },
+      });
+    }
+
+    if (!inventoryItem.tracked) {
+      console.error(`Inventory tracking is disabled for item: ${inventoryItemId}`);
+      return res.status(400).json({
+        success: false,
+        error: 'Inventory tracking is disabled',
+        details: { inventoryItemId },
+      });
+    }
+
     console.log('Inventory item:', inventoryItem);
 
-    // Note: Removed inventoryItemUpdate mutation, as inventoryActivate may enable tracking
-    // If explicit tracking is required, uncomment and adjust the following:
-    /*
-    if (!inventoryItem.tracked) {
-      console.log(`Enabling tracking for item ${inventoryItemId}`);
-      const trackingUpdate = await graphqlClient.request(`
-        mutation inventoryItemPatch($input: InventoryItemInput!) {
-          inventoryItemPatch(input: $input) {
-            inventoryItem {
-              id
-              tracked
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `, {
-        variables: {
-          input: {
-            id: `gid://shopify/InventoryItem/${inventoryItemId}`,
-            tracked: true
-          }
-        }
-      });
-
-      console.log('Tracking update response:', JSON.stringify(trackingUpdate, null, 2));
-
-      if (trackingUpdate?.data?.inventoryItemPatch?.userErrors?.length > 0) {
-        console.error('Tracking update errors:', trackingUpdate.data.inventoryItemPatch.userErrors);
-        return res.status(400).json({
-          success: false,
-          error: 'Failed to enable tracking',
-          details: trackingUpdate.data.inventoryItemPatch.userErrors,
-        });
-      }
-
-      if (!trackingUpdate?.data?.inventoryItemPatch?.inventoryItem) {
-        console.error('Tracking update failed, no inventory item returned');
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to enable tracking',
-          details: 'No inventory item returned from mutation',
-        });
-      }
-    }
-    */
-
-    // Activate inventory at location if not stocked
     if (!inventoryItem.inventoryLevel) {
       console.log(`Activating inventory for item ${inventoryItemId} at location ${locationId}`);
       const activateResponse = await graphqlClient.request(`
@@ -713,7 +681,6 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       }
     }
 
-    // Update inventory quantity
     console.log(`Updating inventory for item ${inventoryItemId} at location ${locationId} to ${available}`);
     const updateResponse = await graphqlClient.request(`
       mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
@@ -747,7 +714,6 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
       });
     }
 
-    // Optional: fetch updated inventory level
     let updatedInventory = null;
     try {
       const invResponse = await graphqlClient.request(`
@@ -783,6 +749,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
     });
   }
 });
+
 
 // Update product collections
 app.put("/api/product-collections/:id", async (req, res) => {
@@ -951,7 +918,6 @@ app.put('/api/products/:id', async (req, res) => {
 
 
 
-
 // Create product
 
 app.post("/api/products", async (_req, res) => {
@@ -993,4 +959,6 @@ app.use("/*", shopify.ensureInstalledOnShop(), async (_req, res, _next) => {
     );
 });
 
-app.listen(PORT);
+app.listen(PORT,() => {
+  console.log(`Express server listening on port ${PORT}`);
+});

@@ -3,11 +3,14 @@ import { CancelMinor, SendMajor } from '@shopify/polaris-icons';
 import { useCallback, useEffect, useState } from 'react';
 import { checkboxCss, statusOptions } from '../utils/constants.jsx';
 
-export default function ProductForm({ product, collectionsData, onSubmit, onCancel }) {
+export default function ProductForm({ product, collectionsData, onSubmit, onCancel, setToastMessage, setToastError, setToastActive }) {
     const [selectedStatusOptions, setSelectedStatusOptions] = useState([product.status]);
     const [collections, setCollections] = useState([]);
     const [selectedCollections, setSelectedCollections] = useState([]);
     const [inputStatusValue, setInputStatusValue] = useState(product.status);
+    const [skuError, setSkuError] = useState(null);
+    const [trackInventory, setTrackInventory] = useState(product.variants.edges[0]?.node.inventoryItem?.tracked || false);
+    const[trackInventoryError, setTrackInventoryError] = useState(null);
 
     const [formData, setFormData] = useState({
         title: product.title || "-",
@@ -16,8 +19,8 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         sku: product.variants.edges[0]?.node.sku || "",
         salePrice: product.variants.edges[0]?.node.price || "",
         price: product.variants.edges[0]?.node.compareAtPrice || "",
-        tags: product.tags.join(', ') || "",
-        inventoryQuantity: product.variants.edges[0]?.node.inventoryQuantity || 0,
+        tags: Array.isArray(product.tags) ? product.tags.join(', ') : "",
+        inventoryQuantity: product.variants.edges[0]?.node.inventoryQuantity?.toString() || "0",
         inventoryItemId: product.variants.edges[0]?.node.inventoryItem.id || "",
         collections: product.collections.edges.map(edge => edge.node.id) || []
     });
@@ -47,7 +50,29 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
     };
 
     const handleChange = (field) => (value) => {
-        setFormData({ ...formData, [field]: value });
+        let newValue = value === null || value === undefined ? '' : String(value);
+        if (field === 'inventoryQuantity') {
+            if (formData.inventoryQuantity === '0' && /^[1-9]|-/.test(newValue)) {
+                newValue = newValue;
+            } else if (newValue === '') {
+                newValue = '0';
+            } else if (isNaN(parseInt(newValue)) && newValue !== '-' && newValue !== '-0.') {
+                newValue = '0';
+            }
+        }
+
+        setFormData({ ...formData, [field]: newValue });
+
+        if (field === 'inventoryQuantity' || field === 'sku') {
+            const inventoryQty = field === 'inventoryQuantity' ? parseInt(newValue) || 0 : parseInt(formData.inventoryQuantity) || 0;
+            const skuValue = field === 'sku' ? newValue : formData.sku;
+
+            if (inventoryQty !== 0 && !skuValue) {
+                setSkuError("SKU is required when inventory quantity is not 0");
+            } else {
+                setSkuError(null);
+            }
+        }
     };
 
     const handleCollectionToggle = (collectionId) => {
@@ -73,17 +98,17 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             label="Status"
             value={inputStatusValue}
             placeholder="Set the status"
-            autoComplete="off"
+            autoComplete="false"
         />
     );
 
     const updateStatusSelection = useCallback(
         (selected) => {
-            const selectedValue = selected.map((selectedItem) => {
+            const selectedValue = selected.map((selectedValue) => {
                 const matchedOption = statusOptions.find((option) => {
-                    return option.value.match(selectedItem);
+                    return option.value === selectedValue;
                 });
-                return matchedOption && matchedOption.label;
+                return matchedOption ? matchedOption.label : '';
             });
 
             setSelectedStatusOptions(selected);
@@ -95,8 +120,28 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
     const handleSubmit = async (event) => {
         event.preventDefault();
-        if (isNaN(parseInt(formData.inventoryQuantity))) {
-            console.error("Invalid inventory quantity");
+
+        const finalInventoryQuantity = formData.inventoryQuantity === '' || formData.inventoryQuantity === '-' ? '0' : formData.inventoryQuantity;
+        const inventoryQty = parseInt(finalInventoryQuantity);
+
+        if (isNaN(inventoryQty)) {
+            setToastMessage("Invalid inventory quantity");
+            setToastError(true);
+            setToastActive(true);
+            return;
+        }
+
+        if (inventoryQty !== 0 && !formData.sku) {
+            setSkuError("SKU is required when inventory quantity is not 0");
+            setToastMessage("SKU is required when inventory quantity is not 0");
+            setToastError(true);
+            setToastActive(true);
+            return;
+        }
+
+        if (inventoryQty !== 0 && !trackInventory) {
+            setTrackInventoryError("Track inventory must be enabled to update stock");
+          
             return;
         }
 
@@ -117,19 +162,23 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                         price: parseFloat(formData.salePrice) || 0,
                         sku: formData.sku,
                         compare_at_price: parseFloat(formData.price) || 0,
+                        inventory_management: trackInventory ? 'shopify' : null
                     }],
                     tags: formData.tags ? formData.tags.split(',').map(tag => tag.trim()) : [],
                     status: formData.status.toLowerCase()
                 },
-                inventory: {
+                inventory: trackInventory ? {
                     inventoryItemId: inventoryItemId,
-                    available: parseInt(formData.inventoryQuantity),
-                    locationId: "83114426690"
-                },
+                    available: inventoryQty,
+                    locationId: "83114426690",
+                    sku: formData.sku
+                } : null,
                 collections: selectedCollections.length ? selectedCollections.map(collection => collection.id) : [],
             });
         } catch (error) {
-            console.error('Error updating product:', error);
+            setToastMessage(error.message || "An error occurred while updating");
+            setToastError(true);
+            setToastActive(true);
         } finally {
             setLoading(false);
         }
@@ -139,7 +188,6 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         <div style={{ width: '100%', padding: '1rem' }}>
             <Form onSubmit={handleSubmit}>
                 <div style={{ display: 'flex', gap: '3rem', width: '100%', marginBottom: '2rem' }}>
-                    {/* Column 1: Quick Edit and Product Data */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <Text as="p" fontWeight="bold">QUICK EDIT</Text>
                         <TextField
@@ -173,7 +221,6 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                         />
                     </div>
 
-                    {/* Column 2: Product Data */}
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <Text as="p" fontWeight="bold">Product Data</Text>
                         <TextField
@@ -182,6 +229,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                             value={formData.sku}
                             onChange={handleChange('sku')}
                             required
+                            error={skuError}
                             fullWidth
                         />
                         <TextField
@@ -198,15 +246,23 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                             onChange={handleChange('salePrice')}
                             fullWidth
                         />
-                        <TextField
-                            label="Stock"
-                            type="number"
-                            value={formData.inventoryQuantity}
-                            onChange={handleChange('inventoryQuantity')}
-                            fullWidth
-                        />
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem' }}>
+                            <TextField
+                                label="Stock"
+                                type="number"
+                                value={formData.inventoryQuantity}
+                                onChange={handleChange('inventoryQuantity')}
+                                fullWidth
+                            />
+                            <Checkbox
+                                label="Track Inventory"
+                                checked={trackInventory}
+                                onChange={(checked) => setTrackInventory(checked)}
+                                error={trackInventoryError}
+                            />
+                        </div>
                     </div>
-                    {/* Column 3: Product Category */}
+
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <Text as='p'>Product Category</Text>
                         <div style={checkboxCss}>

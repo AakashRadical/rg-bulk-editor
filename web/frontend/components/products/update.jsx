@@ -33,7 +33,8 @@ export default function Update({ open, product, collections, handleToggle, updat
             });
     
             if (!productResponse.ok) {
-                throw new Error(`Error updating product: ${productResponse.statusText}`);
+                const errorData = await productResponse.json();
+                throw new Error(errorData.error || `Error updating product: ${productResponse.statusText}`);
             }
     
             // Update collections if they're provided
@@ -54,8 +55,13 @@ export default function Update({ open, product, collections, handleToggle, updat
                 }
             }
     
-            // Update inventory level if inventory data exists
-            if (updatedData.inventory && updatedData.inventory.inventoryItemId) {
+            // Update inventory level if inventory data exists and quantity has changed
+            const originalQuantity = product.variants.edges[0]?.node.inventoryQuantity;
+            if (
+                updatedData.inventory &&
+                updatedData.inventory.inventoryItemId &&
+                parseInt(updatedData.inventory.available) !== originalQuantity
+            ) {
                 const cleanInventoryItemId = updatedData.inventory.inventoryItemId.split('/').pop();
                 
                 const inventoryResponse = await fetch(`/api/inventorylevel/${cleanInventoryItemId}`, {
@@ -65,7 +71,8 @@ export default function Update({ open, product, collections, handleToggle, updat
                     },
                     body: JSON.stringify({
                         available: parseInt(updatedData.inventory.available),
-                        locationId: updatedData.inventory.locationId
+                        locationId: updatedData.inventory.locationId,
+                        sku: updatedData.inventory.sku
                     }),
                 });
 
@@ -74,7 +81,6 @@ export default function Update({ open, product, collections, handleToggle, updat
                 try {
                     inventoryData = inventoryText ? JSON.parse(inventoryText) : {};
                 } catch (e) {
-                    console.error('Error parsing inventory response:', e);
                     throw new Error('Invalid response from inventory update');
                 }
 
@@ -101,14 +107,18 @@ export default function Update({ open, product, collections, handleToggle, updat
                                 price: updatedData.product.variants[0].price.toString(),
                                 compareAtPrice: updatedData.product.variants[0].compare_at_price?.toString() || null,
                                 sku: updatedData.product.variants[0].sku,
-                                inventoryQuantity: updatedData.inventory ? parseInt(updatedData.inventory.available) : product.variants.edges[0].node.inventoryQuantity
+                                inventoryQuantity: updatedData.inventory ? parseInt(updatedData.inventory.available) : product.variants.edges[0].node.inventoryQuantity,
+                                inventoryItem: {
+                                    ...product.variants.edges[0].node.inventoryItem,
+                                    tracked: updatedData.product.variants[0].inventory_management === 'shopify'
+                                }
                             }
                         }]
                     },
                     collections: {
                         edges: updatedData.collections.map(collectionId => {
                             const collectionNode = collectionEdges.find(c => c.node?.id === collectionId)?.node ||
-                                                  collectionEdges.find(c => c.id === collectionId) || // Handle array of nodes
+                                                  collectionEdges.find(c => c.id === collectionId) || 
                                                   { id: collectionId, title: "" };
                             return { node: collectionNode };
                         })
@@ -124,7 +134,6 @@ export default function Update({ open, product, collections, handleToggle, updat
             setToastActive(true);
             handleToggle();
         } catch (error) {
-            console.error('Update error:', error);
             setToastMessage(error.message || "An error occurred while updating");
             setToastError(true);
             setToastActive(true);
@@ -147,6 +156,9 @@ export default function Update({ open, product, collections, handleToggle, updat
                                 collectionsData={collections}
                                 onSubmit={handleSubmit}
                                 onCancel={handleToggle}
+                                setToastMessage={setToastMessage}
+                                setToastError={setToastError}
+                                setToastActive={setToastActive}
                             />
                         </LegacyCard>
                     </div>
