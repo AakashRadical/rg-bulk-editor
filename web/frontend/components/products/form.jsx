@@ -17,7 +17,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
     // Initialize default location
     useEffect(() => {
-        console.log("Fetched locations:", fetchedLocations);
+      
         if (fetchedLocations && fetchedLocations.length > 0) {
             setSelectedLocation(fetchedLocations[0].id); // Default to first location
         }
