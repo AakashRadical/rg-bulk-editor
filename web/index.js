@@ -530,7 +530,7 @@ app.get("/api/inventorylevel", async (req, res) => {
     const locationResponse = await client.request(locationQuery);
     
     const locationId = locationResponse.data?.locations?.edges?.[0]?.node?.id;
-console.log("Location ID", locationId);
+// console.log("Location ID", locationId);
     if (!locationId) {
       return res.status(400).json({ error: "No location ID found in shop." });
     }
@@ -899,55 +899,53 @@ app.put("/api/product-collections/:id", async (req, res) => {
 // product route
 
 app.put('/api/products/:id', async (req, res) => {
-
   const productId = req.params.id;
-
   const { product } = req.body;
 
-
+  if (!product || !product.variants || !product.variants.length) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid product data',
+      details: 'Product and variants are required',
+    });
+  }
 
   const client = new shopify.api.clients.Rest({
-
     session: res.locals.shopify.session,
-
   });
 
-
-
   try {
+    // Sanitize variant data
+    const sanitizedProduct = {
+      ...product,
+      variants: product.variants.map(variant => {
+        const sanitizedVariant = { ...variant };
+        // Only include SKU if inventory_management is 'shopify' and SKU is non-empty
+        if (sanitizedVariant.inventory_management !== 'shopify' || !sanitizedVariant.sku) {
+          delete sanitizedVariant.sku;
+        }
+        return sanitizedVariant;
+      }),
+    };
 
     const updatedProduct = await client.put({
-
       path: `products/${productId}`,
-
-      data: { product },
-
+      data: { product: sanitizedProduct },
       type: DataType.JSON,
-
     });
 
     res.status(200).send(updatedProduct);
-
   } catch (error) {
-
     console.error('Error updating product:', {
-
       message: error.message,
-
       response: error.response?.body,
-
     });
-
     res.status(400).json({
-
+      success: false,
       error: 'Failed to update product',
-
-      details: error.response?.body?.errors || error.message
-
+      details: error.response?.body?.errors || error.message,
     });
-
   }
-
 });
 
 

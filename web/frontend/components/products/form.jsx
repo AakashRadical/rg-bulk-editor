@@ -5,21 +5,21 @@ import { checkboxCss, statusOptions } from '../utils/constants.jsx';
 import { ProductContext } from '../context/ProductContext.jsx';
 
 export default function ProductForm({ product, collectionsData, onSubmit, onCancel, setToastMessage, setToastError, setToastActive }) {
-    const [selectedStatusOptions, setSelectedStatusOptions] = useState([product.status]);
+    const [selectedStatusText, setSelectedStatusText] = useState([product.status]);
     const [collections, setCollections] = useState([]);
     const [selectedCollections, setSelectedCollections] = useState([]);
     const [inputStatusValue, setInputStatusValue] = useState(product.status);
     const [skuError, setSkuError] = useState(null);
     const [trackInventory, setTrackInventory] = useState(product.variants.edges[0]?.node.inventoryItem?.tracked || false);
     const [trackInventoryError, setTrackInventoryError] = useState(null);
-    const [selectedLocation, setSelectedLocation] = useState(null); // State for selected location
+    const [inventoryLocationError, setInventoryLocationError] = useState(null);
+    const [selectedLocation, setSelectedLocation] = useState(null);
     const { fetchedLocations } = useContext(ProductContext);
 
     // Initialize default location
     useEffect(() => {
-      
         if (fetchedLocations && fetchedLocations.length > 0) {
-            setSelectedLocation(fetchedLocations[0].id); // Default to first location
+            setSelectedLocation(fetchedLocations[0].id);
         }
     }, [fetchedLocations]);
 
@@ -40,7 +40,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
     useEffect(() => {
         fetchCollections();
-    }, [collectionsData]); // Added dependency
+    }, [collectionsData]);
 
     const fetchCollections = async () => {
         try {
@@ -78,8 +78,8 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             const inventoryQty = field === 'inventoryQuantity' ? parseInt(newValue) || 0 : parseInt(formData.inventoryQuantity) || 0;
             const skuValue = field === 'sku' ? newValue : formData.sku;
 
-            if (inventoryQty !== 0 && !skuValue) {
-                setSkuError("SKU is required when inventory quantity is not 0");
+            if (trackInventory && inventoryQty !== 0 && !skuValue) {
+                setSkuError("SKU is required when inventory quantity is not 0!");
             } else {
                 setSkuError(null);
             }
@@ -122,7 +122,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                 return matchedOption ? matchedOption.label : '';
             });
 
-            setSelectedStatusOptions(selected);
+            setSelectedStatusText(selected);
             setInputStatusValue(selectedValue[0] || '');
             setFormData(prev => ({ ...prev, status: selected[0] || '' }));
         },
@@ -136,32 +136,24 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         const inventoryQty = parseInt(finalInventoryQuantity);
 
         if (isNaN(inventoryQty)) {
-            setToastMessage("Invalid inventory quantity");
+            setToastMessage("Invalid inventory quantity!");
             setToastError(true);
             setToastActive(true);
             return;
         }
 
-        if (inventoryQty !== 0 && !formData.sku) {
-            setSkuError("SKU is required when inventory quantity is not 0");
-            setToastMessage("SKU is required when inventory quantity is not 0");
-            setToastError(true);
-            setToastActive(true);
+        if (trackInventory && inventoryQty !== 0 && !formData.sku) {
+            setSkuError("SKU is required when inventory quantity is not 0!");
             return;
         }
 
         if (inventoryQty !== 0 && !trackInventory) {
-            setTrackInventoryError("Track inventory must be enabled to update stock");
-            setToastMessage("Track inventory must be enabled to update stock");
-            setToastError(true);
-            setToastActive(true);
+            setTrackInventoryError("Track inventory must be enabled to update stock!");
             return;
         }
 
         if (inventoryQty !== 0 && !selectedLocation) {
-            setToastMessage("Please select an inventory location");
-            setToastError(true);
-            setToastActive(true);
+            setInventoryLocationError("Please select an inventory location!");
             return;
         }
 
@@ -172,31 +164,37 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         setLoading(true);
 
         try {
+            // Conditionally include SKU only when inventory is tracked and quantity is non-zero
+            const variantData = {
+                id: variantId,
+                price: parseFloat(formData.salePrice) || 0,
+                compare_at_price: parseFloat(formData.price) || 0,
+                inventory_management: trackInventory ? 'shopify' : null,
+            };
+
+            if (trackInventory && inventoryQty !== null) {
+                variantData.sku = formData.sku;
+            }
+
             await onSubmit({
                 product: {
                     id: productId,
                     title: formData.title,
                     handle: formData.slug,
-                    variants: [{
-                        id: variantId,
-                        price: parseFloat(formData.salePrice) || 0,
-                        sku: formData.sku,
-                        compare_at_price: parseFloat(formData.price) || 0,
-                        inventory_management: trackInventory ? 'shopify' : null
-                    }],
+                    variants: [variantData],
                     tags: formData.tags ? formData.tags.split(',').map(tag => tag.trim()) : [],
-                    status: formData.status.toLowerCase()
+                    status: formData.status.toLowerCase(),
                 },
-                inventory: trackInventory ? {
+                inventory: trackInventory && inventoryQty !== 0 ? {
                     inventoryItemId: inventoryItemId,
                     available: inventoryQty,
-                    locationId: selectedLocation.split('/').pop(), // Use dynamic locationId
+                    locationId: selectedLocation.split('/').pop(),
                     sku: formData.sku
                 } : null,
                 collections: selectedCollections.length ? selectedCollections.map(collection => collection.id) : [],
             });
         } catch (error) {
-            setToastMessage(error.message || "An error occurred while updating");
+            setToastMessage(error.message || "An error occurred while updating!");
             setToastError(true);
             setToastActive(true);
         } finally {
@@ -205,102 +203,177 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
     };
 
     return (
-        <div style={{ width: '100%', padding: '1rem' }}>
+        <div style={{
+            width: '100%',
+            padding: '2rem',
+            background: '#fff',
+            borderRadius: '8px',
+            boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
+            maxWidth: '1200px',
+            margin: '0 auto'
+        }}>
             <Form onSubmit={handleSubmit}>
-                <div style={{ display: 'flex', gap: '3rem', width: '100%', marginBottom: '2rem' }}>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <Text as="p" fontWeight="bold">QUICK EDIT</Text>
-                        <TextField
-                            label="Title"
-                            type="text"
-                            value={formData.title}
-                            onChange={handleChange('title')}
-                            fullWidth
-                        />
-                        <TextField
-                            label="Slug"
-                            type="text"
-                            value={formData.slug}
-                            onChange={handleChange('slug')}
-                            fullWidth
-                        />
-                        <Autocomplete
-                            options={statusOptions}
-                            selected={selectedStatusOptions}
-                            onSelect={updateStatusSelection}
-                            textField={statusTextField}
-                        />
-                        <TextField
-                            label="Product Tags"
-                            type="text"
-                            value={formData.tags}
-                            onChange={handleChange('tags')}
-                            helpText='Separate tags with commas'
-                            multiline
-                            fullWidth
-                        />
-                    </div>
-
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <Text as="p" fontWeight="bold">Product Data</Text>
-                        <TextField
-                            label="SKU *"
-                            type="text"
-                            value={formData.sku}
-                            onChange={handleChange('sku')}
-                            required
-                            error={skuError}
-                            Ascend
-                            fullWidth
-                        />
-                        <TextField
-                            label="Price"
-                            type="number"
-                            value={formData.price}
-                            onChange={handleChange('price')}
-                            fullWidth
-                        />
-                        <TextField
-                            label="Sale Price"
-                            type="number"
-                            value ={formData.salePrice}
-                            onChange={handleChange('salePrice')}
-                            fullWidth
-                        />
-                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '1rem' }}>
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '2rem',
+                    marginBottom: '2rem'
+                }}>
+                    {/* Quick Edit Section */}
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.5rem',
+                        padding: '1rem',
+                        background: '#f9fafb',
+                        borderRadius: '4px'
+                    }}>
+                        <Text as="p" fontWeight="bold" variant="headingMd">QUICK EDIT</Text>
+                        <div style={{ position: 'relative' }}>
                             <TextField
-                                label="Stock"
-                                type="number"
-                                value={formData.inventoryQuantity}
-                                onChange={handleChange('inventoryQuantity')}
+                                label="Title"
+                                type="text"
+                                value={formData.title}
+                                onChange={handleChange('title')}
                                 fullWidth
                             />
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="Slug"
+                                type="text"
+                                value={formData.slug}
+                                onChange={handleChange('slug')}
+                                fullWidth
+                            />
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <Autocomplete
+                                options={statusOptions}
+                                selected={selectedStatusText}
+                                onSelect={updateStatusSelection}
+                                textField={statusTextField}
+                            />
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="Product Tags"
+                                type="text"
+                                value={formData.tags}
+                                onChange={handleChange('tags')}
+                                helpText='Separate tags with commas'
+                                multiline
+                                fullWidth
+                            />
+                        </div>
+                    </div>
+
+                    {/* Product Data Section */}
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.5rem',
+                        padding: '1rem',
+                        background: '#f9fafb',
+                        borderRadius: '4px'
+                    }}>
+                        <Text as="p" fontWeight="bold" variant="headingMd">Product Data</Text>
+                        <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="SKU"
+                                type="text"
+                                value={formData.sku}
+                                onChange={handleChange('sku')}
+                                required={trackInventory && parseInt(formData.inventoryQuantity) !== 0}
+                                error={skuError}
+                                fullWidth
+                            />
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="Price"
+                                type="number"
+                                value={formData.price}
+                                onChange={handleChange('price')}
+                                fullWidth
+                            />
+                        </div>
+                        <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="Sale Price"
+                                type="number"
+                                value={formData.salePrice}
+                                onChange={handleChange('salePrice')}
+                                fullWidth
+                            />
+                        </div>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '1rem',
+                            position: 'relative'
+                        }}>
+                            <div style={{ flex: 1 }}>
+                                <TextField
+                                    label="Stock"
+                                    type="number"
+                                    value={formData.inventoryQuantity}
+                                    onChange={handleChange('inventoryQuantity')}
+                                    fullWidth
+                                />
+                            </div>
                             <Checkbox
                                 label="Track Inventory"
                                 checked={trackInventory}
-                                onChange={(checked) => setTrackInventory(checked)}
+                                onChange={(checked) => {
+                                    setTrackInventory(checked);
+                                    setTrackInventoryError(null);
+                                    setInventoryLocationError(null);
+                                    if (!checked) setSkuError(null); // Clear SKU error when tracking is disabled
+                                }}
                                 error={trackInventoryError}
                             />
                         </div>
-                        <Select
-                            label="Inventory Location"
-                            options={[
-                                { label: 'Select a location', value: '' },
-                                ...(fetchedLocations || []).map(location => ({
-                                    label: location.name,
-                                    value: location.id
-                                }))
-                            ]}
-                            onChange={(value) => setSelectedLocation(value)}
-                            value={selectedLocation || ''}
-                            disabled={!trackInventory}
-                            error={!selectedLocation && trackInventory ? 'Please select a location' : null}
-                        />
+                        <div style={{ position: 'relative' }}>
+                            <Select
+                                label="Inventory Location"
+                                options={[
+                                    { label: 'Select a location', value: '' },
+                                    ...(fetchedLocations || []).map(location => ({
+                                        label: location.name,
+                                        value: location.id
+                                    }))
+                                ]}
+                                onChange={(value) => {
+                                    setSelectedLocation(value);
+                                    if (value) setInventoryLocationError(null);
+                                }}
+                                value={selectedLocation || ''}
+                                disabled={!trackInventory}
+                                error={inventoryLocationError}
+                            />
+                        </div>
                     </div>
 
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        <Text as='p'>Product Category</Text>
-                        <div style={checkboxCss}>
+                    {/* Product Category Section */}
+                    <div style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1.5rem',
+                        padding: '1rem',
+                        background: '#f9fafb',
+                        borderRadius: '4px'
+                    }}>
+                        <Text as="p" fontWeight="bold" variant="headingMd">Product Category</Text>
+                        <div style={{
+                            ...checkboxCss,
+                            maxHeight: '300px',
+                            overflowY: 'auto',
+                            padding: '0.5rem',
+                            background: '#fff',
+                            border: '1px solid #dfe3e8',
+                            borderRadius: '4px'
+                        }}>
                             {collections.map((collection) => (
                                 <Checkbox
                                     key={collection.id}
