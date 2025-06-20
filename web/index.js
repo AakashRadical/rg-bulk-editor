@@ -192,6 +192,40 @@ app.get("/api/domain", async (req, res) => {
   }
 });
 
+
+app.get("/api/locations", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    if (!session) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    // Example: Fetch locations using Shopify API
+    const client = new shopify.api.clients.Graphql({ session });
+    const query = `{
+      locations(first: 10) {
+        edges {
+          node {
+            id
+            name
+            address {
+              city
+              country
+            }
+          }
+        }
+      }
+    }`;
+    const response = await client.query({ data: { query } });
+    const locations = response.body.data.locations.edges.map(edge => edge.node);
+
+    res.status(200).json({ locations });
+  } catch (error) {
+    console.error("Error fetching locations:", error);
+    res.status(500).json({ error: "Failed to fetch locations" });
+  }
+});
+
 // Get products using GraphQL
 
 app.get("/api/products", async (_req, res) => {

@@ -7,6 +7,7 @@ export const ProductContext = createContext();
 
 export default function ProductProvider({ children }) {
     const { data: fetchedShop, loading: loadingShop } = useFetchData('/api/domain');
+    const {data: fetchedLocations, loading: loadingLocations} = useFetchData('/api/locations');
     const { data: fetchedProducts, loading: loadingProducts } = useFetchData('/api/products');
     const { data: fetchedCollections, loading: loadingCollections } = useFetchData('/api/collections');
     const { data: fetchedInventory, loading: loadingInventory } = useFetchData('/api/inventorylevel');
@@ -34,6 +35,8 @@ export default function ProductProvider({ children }) {
         (currentPage - 1) * itemsPerPage,
         currentPage * itemsPerPage
     );
+ 
+ 
 
     // Function to update a product in the state
     const updateProduct = useCallback((updatedProduct) => {
@@ -478,7 +481,8 @@ if (selectedGiftCard) { // Check boolean directly
         handleSelectionChange,
         handleFiltersQueryChange,
         handleFiltersClearAll,
-        updateProduct // Add updateProduct to context value
+        updateProduct ,
+        fetchedLocations, // Add updateProduct to context value
     };
 
     return (

@@ -29,6 +29,8 @@ export default function useFetchData(apiEndpoint) {
                     setData(data.data);
                 } else if(apiEndpoint === "/api/domain") {
                     setData(data.domain);
+                }else if(apiEndpoint === "/api/locations") {
+                    setData(data?.locations);
                 }
             } catch (err) {
                 setError(err.message);

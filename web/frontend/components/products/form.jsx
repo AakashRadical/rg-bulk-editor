@@ -1,7 +1,8 @@
-import { Autocomplete, Button, ButtonGroup, Checkbox, Form, Text, TextField } from '@shopify/polaris';
+import { Autocomplete, Button, ButtonGroup, Checkbox, Form, Select, Text, TextField } from '@shopify/polaris';
 import { CancelMinor, SendMajor } from '@shopify/polaris-icons';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { checkboxCss, statusOptions } from '../utils/constants.jsx';
+import { ProductContext } from '../context/ProductContext.jsx';
 
 export default function ProductForm({ product, collectionsData, onSubmit, onCancel, setToastMessage, setToastError, setToastActive }) {
     const [selectedStatusOptions, setSelectedStatusOptions] = useState([product.status]);
@@ -10,7 +11,17 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
     const [inputStatusValue, setInputStatusValue] = useState(product.status);
     const [skuError, setSkuError] = useState(null);
     const [trackInventory, setTrackInventory] = useState(product.variants.edges[0]?.node.inventoryItem?.tracked || false);
-    const[trackInventoryError, setTrackInventoryError] = useState(null);
+    const [trackInventoryError, setTrackInventoryError] = useState(null);
+    const [selectedLocation, setSelectedLocation] = useState(null); // State for selected location
+    const { fetchedLocations } = useContext(ProductContext);
+
+    // Initialize default location
+    useEffect(() => {
+        console.log("Fetched locations:", fetchedLocations);
+        if (fetchedLocations && fetchedLocations.length > 0) {
+            setSelectedLocation(fetchedLocations[0].id); // Default to first location
+        }
+    }, [fetchedLocations]);
 
     const [formData, setFormData] = useState({
         title: product.title || "-",
@@ -29,7 +40,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
     useEffect(() => {
         fetchCollections();
-    }, []);
+    }, [collectionsData]); // Added dependency
 
     const fetchCollections = async () => {
         try {
@@ -141,7 +152,16 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
 
         if (inventoryQty !== 0 && !trackInventory) {
             setTrackInventoryError("Track inventory must be enabled to update stock");
-          
+            setToastMessage("Track inventory must be enabled to update stock");
+            setToastError(true);
+            setToastActive(true);
+            return;
+        }
+
+        if (inventoryQty !== 0 && !selectedLocation) {
+            setToastMessage("Please select an inventory location");
+            setToastError(true);
+            setToastActive(true);
             return;
         }
 
@@ -170,7 +190,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                 inventory: trackInventory ? {
                     inventoryItemId: inventoryItemId,
                     available: inventoryQty,
-                    locationId: "83114426690",
+                    locationId: selectedLocation.split('/').pop(), // Use dynamic locationId
                     sku: formData.sku
                 } : null,
                 collections: selectedCollections.length ? selectedCollections.map(collection => collection.id) : [],
@@ -230,6 +250,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                             onChange={handleChange('sku')}
                             required
                             error={skuError}
+                            Ascend
                             fullWidth
                         />
                         <TextField
@@ -242,7 +263,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                         <TextField
                             label="Sale Price"
                             type="number"
-                            value={formData.salePrice}
+                            value ={formData.salePrice}
                             onChange={handleChange('salePrice')}
                             fullWidth
                         />
@@ -261,6 +282,20 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 error={trackInventoryError}
                             />
                         </div>
+                        <Select
+                            label="Inventory Location"
+                            options={[
+                                { label: 'Select a location', value: '' },
+                                ...(fetchedLocations || []).map(location => ({
+                                    label: location.name,
+                                    value: location.id
+                                }))
+                            ]}
+                            onChange={(value) => setSelectedLocation(value)}
+                            value={selectedLocation || ''}
+                            disabled={!trackInventory}
+                            error={!selectedLocation && trackInventory ? 'Please select a location' : null}
+                        />
                     </div>
 
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
