@@ -140,7 +140,7 @@ app.get("/api/plan/confirm", async (req, res) => {
         path: `recurring_application_charges/${charge_id}/activate`,
       });
 
-      console.log(`Plan "${charge.name}" activated for ${session.shop}`);
+      // console.log(`Plan "${charge.name}" activated for ${session.shop}`);
       res.redirect(`/?shop=${session.shop}`);
     } else {
       res.redirect(`/pricing?shop=${session.shop}`);
@@ -635,7 +635,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
 
     // Enable inventory tracking if disabled
     if (!inventoryItem.tracked) {
-      console.log(`Enabling inventory tracking for item: ${inventoryItemId}`);
+      // console.log(`Enabling inventory tracking for item: ${inventoryItemId}`);
       const enableTrackingMutation = `
         mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
           inventoryItemUpdate(id: $id, input: $input) {
@@ -667,7 +667,7 @@ app.put('/api/inventorylevel/:id', async (req, res) => {
         });
       }
 
-      console.log(`Inventory tracking enabled for item: ${inventoryItemId}`);
+      // console.log(`Inventory tracking enabled for item: ${inventoryItemId}`);
     }
 
     // Update SKU if provided (like REST API)
@@ -952,6 +952,9 @@ app.put('/api/products/:id', async (req, res) => {
   const productId = req.params.id;
   const { product } = req.body;
 
+  // Log request body for debugging
+  console.log('Request Body:', JSON.stringify(req.body, null, 2));
+
   if (!product || !product.variants || !product.variants.length) {
     return res.status(400).json({
       success: false,
@@ -1017,6 +1020,7 @@ app.put('/api/products/:id', async (req, res) => {
     if (productUpdate.userErrors && productUpdate.userErrors.length > 0) {
       console.error('Product update errors:', productUpdate.userErrors);
       return res.status(400).json({
+        success: false,
         error: 'Failed to update product',
         details: productUpdate.userErrors,
       });
@@ -1078,6 +1082,7 @@ app.put('/api/products/:id', async (req, res) => {
     ) {
       console.error('Variant update errors:', productVariantsBulkUpdate.userErrors);
       return res.status(400).json({
+        success: false,
         error: 'Failed to update variants',
         details: productVariantsBulkUpdate.userErrors,
       });
@@ -1122,7 +1127,7 @@ app.put('/api/products/:id', async (req, res) => {
 
         console.log('Inventory Item SKU Input:', JSON.stringify({ id: inventoryItemId, input: inventoryItemInput }, null, 2));
 
-        // Optional: Log existing SKU for debugging (no validation)
+        // Optional: Log existing SKU for debugging
         try {
           const existingSkuQuery = await client.request(`
             query {
@@ -1153,6 +1158,7 @@ app.put('/api/products/:id', async (req, res) => {
         ) {
           console.error('SKU update errors:', inventoryItemUpdate.userErrors);
           return res.status(400).json({
+            success: false,
             error: 'Failed to update variant SKU',
             details: inventoryItemUpdate.userErrors,
           });
@@ -1185,6 +1191,9 @@ app.put('/api/products/:id', async (req, res) => {
         quantity: parseInt(variant.inventory_quantity),
       }));
 
+    // Log inventory updates for debugging
+    console.log('Inventory Updates:', JSON.stringify(inventoryUpdates, null, 2));
+
     if (inventoryUpdates.length > 0) {
       const inventoryItemUpdateMutation = `
         mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
@@ -1201,14 +1210,15 @@ app.put('/api/products/:id', async (req, res) => {
         }
       `;
 
-      const inventoryMutation = `
-        mutation inventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
-          inventoryAdjustQuantities(input: $input) {
-            inventoryLevel {
+      const inventorySetMutation = `
+        mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+          inventorySetOnHandQuantities(input: $input) {
+            inventoryAdjustmentGroup {
               id
-              quantities(names: ["available"]) {
+              reason
+              changes {
                 name
-                quantity
+                delta
               }
             }
             userErrors {
@@ -1225,12 +1235,19 @@ app.put('/api/products/:id', async (req, res) => {
           continue;
         }
 
-        // Check if inventory tracking is enabled
+        // Check if inventory tracking is enabled and inventory level exists
         const itemData = await client.request(`
           query {
             inventoryItem(id: "${update.inventoryItemId}") {
               id
               tracked
+              inventoryLevel(locationId: "${update.locationId}") {
+                id
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+              }
             }
           }
         `);
@@ -1245,6 +1262,7 @@ app.put('/api/products/:id', async (req, res) => {
           });
         }
 
+        // Enable inventory tracking if disabled
         if (!inventoryItem.tracked) {
           console.log(`Enabling inventory tracking for item: ${update.inventoryItemId}`);
           const enableTrackingResponse = await client.request(inventoryItemUpdateMutation, {
@@ -1267,34 +1285,145 @@ app.put('/api/products/:id', async (req, res) => {
           console.log(`Inventory tracking enabled for item: ${update.inventoryItemId}`);
         }
 
+        // Activate inventory level if it doesn't exist
+        if (!inventoryItem.inventoryLevel) {
+          console.log(`Activating inventory for item ${update.inventoryItemId} at location ${update.locationId}`);
+          const activateResponse = await client.request(`
+            mutation inventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
+              inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+                inventoryLevel {
+                  id
+                  quantities(names: ["available"]) {
+                    name
+                    quantity
+                  }
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }
+          `, {
+            variables: {
+              inventoryItemId: update.inventoryItemId,
+              locationId: update.locationId,
+            },
+          });
+
+          const activateErrors = activateResponse?.data?.inventoryActivate?.userErrors;
+          if (activateErrors && activateErrors.length > 0) {
+            console.error('Inventory activation errors:', activateErrors);
+            return res.status(400).json({
+              success: false,
+              error: 'Failed to activate inventory at location',
+              details: activateErrors,
+            });
+          }
+
+          if (!activateResponse?.data?.inventoryActivate?.inventoryLevel) {
+            console.error('Inventory activation failed, no inventory level returned');
+            return res.status(500).json({
+              success: false,
+              error: 'Failed to activate inventory at location',
+              details: 'No inventory level returned from mutation',
+            });
+          }
+        }
+
         console.log('Inventory Update Input:', JSON.stringify(update, null, 2));
 
-        const inventoryResponse = await client.request(inventoryMutation, {
+        // Set the exact quantity using inventorySetOnHandQuantities
+        const inventoryResponse = await client.request(inventorySetMutation, {
           variables: {
             input: {
-              reason: 'correction',
-              changes: [
+              setQuantities: [
                 {
-                  name: 'available',
-                  delta: update.quantity,
                   inventoryItemId: update.inventoryItemId,
                   locationId: update.locationId,
+                  quantity: update.quantity,
                 },
               ],
+              reason: 'correction',
             },
           },
         });
 
-        const { inventoryAdjustQuantities } = inventoryResponse.data;
+        console.log('Inventory Set Response:', JSON.stringify(inventoryResponse.data, null, 2));
+
+        const { inventorySetOnHandQuantities } = inventoryResponse.data;
         if (
-          inventoryAdjustQuantities.userErrors &&
-          inventoryAdjustQuantities.userErrors.length > 0
+          inventorySetOnHandQuantities.userErrors &&
+          inventorySetOnHandQuantities.userErrors.length > 0
         ) {
-          console.error('Inventory update errors:', inventoryAdjustQuantities.userErrors);
+          console.error('Inventory update errors:', inventorySetOnHandQuantities.userErrors);
           return res.status(400).json({
+            success: false,
             error: 'Failed to update inventory',
-            details: inventoryAdjustQuantities.userErrors,
+            details: inventorySetOnHandQuantities.userErrors,
           });
+        }
+
+        // Verify the updated inventory level
+        const verifyInventory = await client.request(`
+          query {
+            inventoryItem(id: "${update.inventoryItemId}") {
+              inventoryLevel(locationId: "${update.locationId}") {
+                id
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+              }
+            }
+          }
+        `);
+
+        console.log('Verified Inventory Level:', JSON.stringify(verifyInventory.data, null, 2));
+
+        const updatedQuantity = verifyInventory?.data?.inventoryItem?.inventoryLevel?.quantities.find(q => q.name === 'available')?.quantity;
+        if (updatedQuantity !== update.quantity) {
+          console.warn(`Inventory update verification failed for item ${update.inventoryItemId}. Expected ${update.quantity}, got ${updatedQuantity}`);
+        }
+      }
+    }
+
+    // Fetch updated inventory for response
+    const updatedVariants = [];
+    for (const variant of product.variants) {
+      if (
+        variant.inventory_management === 'shopify' &&
+        variant.inventory_item_id &&
+        variant.location_id
+      ) {
+        const inventoryItemId = variant.inventory_item_id.startsWith('gid://shopify/InventoryItem/')
+          ? variant.inventory_item_id
+          : `gid://shopify/InventoryItem/${variant.inventory_item_id}`;
+        const locationId = variant.location_id.startsWith('gid://shopify/Location/')
+          ? variant.location_id
+          : `gid://shopify/Location/${variant.location_id}`;
+
+        try {
+          const invResponse = await client.request(`
+            query {
+              inventoryItem(id: "${inventoryItemId}") {
+                inventoryLevel(locationId: "${locationId}") {
+                  id
+                  quantities(names: ["available"]) {
+                    name
+                    quantity
+                  }
+                  updatedAt
+                }
+              }
+            }
+          `);
+          updatedVariants.push({
+            variantId: variant.id,
+            inventoryLevel: invResponse?.data?.inventoryItem?.inventoryLevel,
+          });
+        } catch (e) {
+          console.warn(`Failed to fetch updated inventory for variant ${variant.id}:`, e.message);
         }
       }
     }
@@ -1305,6 +1434,7 @@ app.put('/api/products/:id', async (req, res) => {
       variants: productVariantsBulkUpdate.product.variants.edges.map(
         edge => edge.node
       ),
+      updatedInventory: updatedVariants,
     });
   } catch (error) {
     console.error('Error updating product:', {
@@ -1317,7 +1447,7 @@ app.put('/api/products/:id', async (req, res) => {
       details: error.response?.body?.errors || error.message,
     });
   }
-});
+});  
 
 
 // Create product

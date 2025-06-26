@@ -10,7 +10,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
     const [selectedCollections, setSelectedCollections] = useState([]);
     const [inputStatusValue, setInputStatusValue] = useState(product.status);
     const [skuError, setSkuError] = useState(null);
-    const [trackInventory, setTrackInventory] = useState(product.variants.edges[0]?.node.inventoryItem?.tracked || false);
+    const [trackInventory, setTrackInventory] = useState(true); // Always true for inventory updates
     const [trackInventoryError, setTrackInventoryError] = useState(null);
     const [inventoryLocationError, setInventoryLocationError] = useState(null);
     const [selectedLocation, setSelectedLocation] = useState(null);
@@ -70,6 +70,10 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             } else if (isNaN(parseInt(newValue)) && newValue !== '-' && newValue !== '-0.') {
                 newValue = '0';
             }
+            // Automatically enable Track Inventory and clear errors for any quantity
+            setTrackInventory(true);
+            setTrackInventoryError(null);
+            setInventoryLocationError(null);
         }
 
         setFormData({ ...formData, [field]: newValue });
@@ -147,12 +151,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             return;
         }
 
-        if (inventoryQty !== 0 && !trackInventory) {
-            setTrackInventoryError("Track inventory must be enabled to update stock!");
-            return;
-        }
-
-        if (inventoryQty !== 0 && !selectedLocation) {
+        if (trackInventory && !selectedLocation) {
             setInventoryLocationError("Please select an inventory location!");
             return;
         }
@@ -164,15 +163,19 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         setLoading(true);
 
         try {
-            // Conditionally include SKU only when inventory is tracked and quantity is non-zero
+            // Include inventory fields for any quantity
             const variantData = {
                 id: variantId,
                 price: parseFloat(formData.salePrice) || 0,
                 compare_at_price: parseFloat(formData.price) || 0,
                 inventory_management: trackInventory ? 'shopify' : null,
+                inventory_quantity: inventoryQty,
+                location_id: trackInventory ? selectedLocation.split('/').pop() : null,
+                inventory_item_id: trackInventory ? inventoryItemId : null,
             };
 
-            if (trackInventory && inventoryQty !== null) {
+            // Include SKU only when inventory is tracked
+            if (trackInventory) {
                 variantData.sku = formData.sku;
             }
 
@@ -185,7 +188,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                     tags: formData.tags ? formData.tags.split(',').map(tag => tag.trim()) : [],
                     status: formData.status.toLowerCase(),
                 },
-                inventory: trackInventory && inventoryQty !== 0 ? {
+                inventory: trackInventory ? {
                     inventoryItemId: inventoryItemId,
                     available: inventoryQty,
                     locationId: selectedLocation.split('/').pop(),
@@ -307,50 +310,14 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 fullWidth
                             />
                         </div>
-                        <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '1rem',
-                            position: 'relative'
-                        }}>
-                            <div style={{ flex: 1 }}>
-                                <TextField
-                                    label="Stock"
-                                    type="number"
-                                    value={formData.inventoryQuantity}
-                                    onChange={handleChange('inventoryQuantity')}
-                                    fullWidth
-                                />
-                            </div>
-                            <Checkbox
-                                label="Track Inventory"
-                                checked={trackInventory}
-                                onChange={(checked) => {
-                                    setTrackInventory(checked);
-                                    setTrackInventoryError(null);
-                                    setInventoryLocationError(null);
-                                    if (!checked) setSkuError(null); // Clear SKU error when tracking is disabled
-                                }}
-                                error={trackInventoryError}
-                            />
-                        </div>
                         <div style={{ position: 'relative' }}>
-                            <Select
-                                label="Inventory Location"
-                                options={[
-                                    { label: 'Select a location', value: '' },
-                                    ...(fetchedLocations || []).map(location => ({
-                                        label: location.name,
-                                        value: location.id
-                                    }))
-                                ]}
-                                onChange={(value) => {
-                                    setSelectedLocation(value);
-                                    if (value) setInventoryLocationError(null);
-                                }}
-                                value={selectedLocation || ''}
-                                disabled={!trackInventory}
-                                error={inventoryLocationError}
+                            <TextField
+                                label="Stock"
+                                type="number"
+                                value={formData.inventoryQuantity}
+                                onChange={handleChange('inventoryQuantity')}
+                                fullWidth
+                                helpText="Enter the inventory quantity"
                             />
                         </div>
                     </div>
