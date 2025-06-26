@@ -17,7 +17,7 @@
 }
 .viewIcon {
     display: flex;
-    gap: 0.5rem;
+    gap: 1rem;
     opacity: 0;
     transition: opacity 0.3s ease;
 }

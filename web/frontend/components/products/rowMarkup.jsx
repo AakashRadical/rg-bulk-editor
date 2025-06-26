@@ -10,7 +10,8 @@ export default function RowMarkup({ product, domain, index, collections, selecte
     const title = product?.title || "-";
     const status = product?.status || "-";
     const variant = product?.variants?.edges?.[0]?.node;
-    const stock = variant?.inventoryQuantity || 0;
+    const trackInventory = variant?.inventoryItem?.tracked || false;
+    const stock = trackInventory ? (variant?.inventoryQuantity || 0) : "-";
     const price = variant?.price || "-";
     const collection = product?.collections?.edges
         ?.map((collect) => collect.node.title)
@@ -27,18 +28,10 @@ export default function RowMarkup({ product, domain, index, collections, selecte
         stat = null;
     }
 
-    const handleToggle = useCallback(() => setOpen((open) => !open), []);
-
-    const handleRowClick = useCallback((event) => {
-        if (!event || !event.target) {
-            return;
-        }
-        if (event.target.closest('.viewBtn, .editBtn')) {
-            return;
-        }
+    const handleToggle = useCallback(() => {
+        setOpen((prev) => !prev);
         onSelect();
-        handleToggle();
-    }, [onSelect, handleToggle]);
+    }, [onSelect]);
 
     return (
         <>
@@ -47,10 +40,9 @@ export default function RowMarkup({ product, domain, index, collections, selecte
                 key={product.id}
                 selected={selected}
                 position={index}
+                aria-expanded={open}
                 onClick={handleToggle}
-                  aria-expanded={open}
-                 aria-controls="basic-collapsible"
-                
+                aria-controls="basic-collapsible"
             >
                 <IndexTable.Cell>
                     {imageUrl !== "No Image Available" ? (

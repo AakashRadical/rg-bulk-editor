@@ -1,4 +1,4 @@
-import { Autocomplete, Button, ButtonGroup, Checkbox, Form, Select, Text, TextField } from '@shopify/polaris';
+import { Autocomplete, Button, ButtonGroup, Checkbox, Form, Text, TextField } from '@shopify/polaris';
 import { CancelMinor, SendMajor } from '@shopify/polaris-icons';
 import { useCallback, useContext, useEffect, useState } from 'react';
 import { checkboxCss, statusOptions } from '../utils/constants.jsx';
@@ -10,8 +10,8 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
     const [selectedCollections, setSelectedCollections] = useState([]);
     const [inputStatusValue, setInputStatusValue] = useState(product.status);
     const [skuError, setSkuError] = useState(null);
-    const [trackInventory, setTrackInventory] = useState(true); // Always true for inventory updates
-    const [trackInventoryError, setTrackInventoryError] = useState(null);
+    const [trackQuantity, setTrackQuantity] = useState(product.variants?.edges?.[0]?.node?.inventoryItem?.tracked ?? false);
+    const [trackQuantityError, setTrackQuantityError] = useState(null);
     const [inventoryLocationError, setInventoryLocationError] = useState(null);
     const [selectedLocation, setSelectedLocation] = useState(null);
     const { fetchedLocations } = useContext(ProductContext);
@@ -27,38 +27,36 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
         title: product.title || "-",
         slug: product.handle || "-",
         status: product.status || "-",
-        sku: product.variants.edges[0]?.node.sku || "",
-        salePrice: product.variants.edges[0]?.node.price || "",
-        price: product.variants.edges[0]?.node.compareAtPrice || "",
+        sku: product.variants?.edges?.[0]?.node?.sku || "",
+        salePrice: product.variants?.edges?.[0]?.node?.price || "",
+        price: product.variants?.edges?.[0]?.node?.compareAtPrice || "",
         tags: Array.isArray(product.tags) ? product.tags.join(', ') : "",
-        inventoryQuantity: product.variants.edges[0]?.node.inventoryQuantity?.toString() || "0",
-        inventoryItemId: product.variants.edges[0]?.node.inventoryItem.id || "",
-        collections: product.collections.edges.map(edge => edge.node.id) || []
+        inventoryQuantity: product.variants?.edges?.[0]?.node?.inventoryQuantity?.toString() || "0",
+        inventoryItemId: product.variants?.edges?.[0]?.node?.inventoryItem?.id || "",
+        collections: product.collections?.edges?.map(edge => edge.node.id) || []
     });
 
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
+        const fetchCollections = async () => {
+            try {
+                const formattedCollections = collectionsData.map(edge => ({
+                    id: edge.node.id,
+                    title: edge.node.title,
+                    handle: edge.node.handle
+                }));
+                setCollections(formattedCollections);
+                const initialSelected = formattedCollections.filter(collection =>
+                    formData.collections.includes(collection.id)
+                );
+                setSelectedCollections(initialSelected);
+            } catch (error) {
+                console.error('Error fetching collections:', error);
+            }
+        };
         fetchCollections();
-    }, [collectionsData]);
-
-    const fetchCollections = async () => {
-        try {
-            const formattedCollections = collectionsData.map(edge => ({
-                id: edge.node.id,
-                title: edge.node.title,
-                handle: edge.node.handle
-            }));
-            setCollections(formattedCollections);
-
-            const initialSelected = formattedCollections.filter(collection =>
-                formData.collections.includes(collection.id)
-            );
-            setSelectedCollections(initialSelected);
-        } catch (error) {
-            console.error('Error fetching collections:', error);
-        }
-    };
+    }, [collectionsData, formData.collections]);
 
     const handleChange = (field) => (value) => {
         let newValue = value === null || value === undefined ? '' : String(value);
@@ -70,42 +68,53 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             } else if (isNaN(parseInt(newValue)) && newValue !== '-' && newValue !== '-0.') {
                 newValue = '0';
             }
-            // Automatically enable Track Inventory and clear errors for any quantity
-            setTrackInventory(true);
-            setTrackInventoryError(null);
-            setInventoryLocationError(null);
+            if (newValue !== '0' && newValue !== '') {
+                setTrackQuantity(true);
+                setTrackQuantityError(null);
+                setInventoryLocationError(null);
+            }
         }
 
-        setFormData({ ...formData, [field]: newValue });
+        setFormData(prev => ({ ...prev, [field]: newValue }));
 
         if (field === 'inventoryQuantity' || field === 'sku') {
             const inventoryQty = field === 'inventoryQuantity' ? parseInt(newValue) || 0 : parseInt(formData.inventoryQuantity) || 0;
             const skuValue = field === 'sku' ? newValue : formData.sku;
 
-            if (trackInventory && inventoryQty !== 0 && !skuValue) {
-                setSkuError("SKU is required when inventory quantity is not 0!");
+            if (trackQuantity && inventoryQty !== 0 && !skuValue) {
+                setSkuError("SKU is required when quantity is not 0 and tracking is enabled!");
             } else {
                 setSkuError(null);
             }
         }
     };
 
-    const handleCollectionToggle = (collectionId) => {
+    const handleTrackQuantityChange = useCallback((checked) => {
+        setTrackQuantity(checked);
+        setTrackQuantityError(null);
+        setInventoryLocationError(null);
+        
+        if (!checked) {
+            setFormData(prev => ({ ...prev, inventoryQuantity: '0' }));
+            if (!formData.sku) {
+                setSkuError(null);
+            }
+        }
+    }, []);
+
+    const handleCollectionToggle = useCallback((collectionId) => {
         setSelectedCollections(prev => {
             const isSelected = prev.find(c => c.id === collectionId);
             if (isSelected) {
                 return prev.filter(c => c.id !== collectionId);
             } else {
                 const collection = collections.find(c => c.id === collectionId);
-                return [...prev, collection];
+                return collection ? [...prev, collection] : prev;
             }
         });
-    };
+    }, [collections]);
 
-    const updateStatusText = useCallback(
-        (value) => setInputStatusValue(value),
-        [],
-    );
+    const updateStatusText = useCallback((value) => setInputStatusValue(value), []);
 
     const statusTextField = (
         <Autocomplete.TextField
@@ -113,25 +122,20 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             label="Status"
             value={inputStatusValue}
             placeholder="Set the status"
-            autoComplete="false"
+            autoComplete="off"
         />
     );
 
-    const updateStatusSelection = useCallback(
-        (selected) => {
-            const selectedValue = selected.map((selectedValue) => {
-                const matchedOption = statusOptions.find((option) => {
-                    return option.value === selectedValue;
-                });
-                return matchedOption ? matchedOption.label : '';
-            });
+    const updateStatusSelection = useCallback((selected) => {
+        const selectedValue = selected.map((selectedValue) => {
+            const matchedOption = statusOptions.find((option) => option.value === selectedValue);
+            return matchedOption ? matchedOption.label : '';
+        });
 
-            setSelectedStatusText(selected);
-            setInputStatusValue(selectedValue[0] || '');
-            setFormData(prev => ({ ...prev, status: selected[0] || '' }));
-        },
-        [],
-    );
+        setSelectedStatusText(selected);
+        setInputStatusValue(selectedValue[0] || '');
+        setFormData(prev => ({ ...prev, status: selected[0] || '' }));
+    }, []);
 
     const handleSubmit = async (event) => {
         event.preventDefault();
@@ -146,36 +150,40 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
             return;
         }
 
-        if (trackInventory && inventoryQty !== 0 && !formData.sku) {
-            setSkuError("SKU is required when inventory quantity is not 0!");
+        if (trackQuantity && inventoryQty !== 0 && !formData.sku) {
+            setSkuError("SKU is required when quantity is not 0 and tracking is enabled!");
             return;
         }
 
-        if (trackInventory && !selectedLocation) {
+        if (trackQuantity && !selectedLocation) {
             setInventoryLocationError("Please select an inventory location!");
             return;
         }
 
+        if (inventoryQty !== 0 && !trackQuantity) {
+            setTrackQuantityError("Please enable Track Quantity to set a quantity!");
+            return;
+        }
+
         const productId = product.id.split("/").pop();
-        const variantId = product.variants.edges[0]?.node.id.split("/").pop();
+        const variantId = product.variants?.edges?.[0]?.node?.id.split("/").pop();
         const inventoryItemId = formData.inventoryItemId.split("/").pop();
 
         setLoading(true);
 
         try {
-            // Include inventory fields for any quantity
             const variantData = {
                 id: variantId,
                 price: parseFloat(formData.salePrice) || 0,
                 compare_at_price: parseFloat(formData.price) || 0,
-                inventory_management: trackInventory ? 'shopify' : null,
-                inventory_quantity: inventoryQty,
-                location_id: trackInventory ? selectedLocation.split('/').pop() : null,
-                inventory_item_id: trackInventory ? inventoryItemId : null,
+                inventory_management: trackQuantity ? 'shopify' : null,
+                inventory_quantity: trackQuantity ? inventoryQty : 0,
+                location_id: trackQuantity ? selectedLocation.split('/').pop() : null,
+                inventory_item_id: inventoryItemId,
+                tracked: trackQuantity,
             };
 
-            // Include SKU only when inventory is tracked
-            if (trackInventory) {
+            if (formData.sku) {
                 variantData.sku = formData.sku;
             }
 
@@ -188,7 +196,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                     tags: formData.tags ? formData.tags.split(',').map(tag => tag.trim()) : [],
                     status: formData.status.toLowerCase(),
                 },
-                inventory: trackInventory ? {
+                inventory: trackQuantity ? {
                     inventoryItemId: inventoryItemId,
                     available: inventoryQty,
                     locationId: selectedLocation.split('/').pop(),
@@ -238,7 +246,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 type="text"
                                 value={formData.title}
                                 onChange={handleChange('title')}
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                         <div style={{ position: 'relative' }}>
@@ -247,7 +255,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 type="text"
                                 value={formData.slug}
                                 onChange={handleChange('slug')}
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                         <div style={{ position: 'relative' }}>
@@ -266,7 +274,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 onChange={handleChange('tags')}
                                 helpText='Separate tags with commas'
                                 multiline
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                     </div>
@@ -281,15 +289,15 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                         borderRadius: '4px'
                     }}>
                         <Text as="p" fontWeight="bold" variant="headingMd">Product Data</Text>
-                        <div style={{ position: 'relative' }}>
+                          <div style={{ position: 'relative' }}>
                             <TextField
                                 label="SKU"
                                 type="text"
                                 value={formData.sku}
                                 onChange={handleChange('sku')}
-                                required={trackInventory && parseInt(formData.inventoryQuantity) !== 0}
+                                required={trackQuantity && parseInt(formData.inventoryQuantity) !== 0}
                                 error={skuError}
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                         <div style={{ position: 'relative' }}>
@@ -298,7 +306,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 type="number"
                                 value={formData.price}
                                 onChange={handleChange('price')}
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                         <div style={{ position: 'relative' }}>
@@ -307,7 +315,7 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 type="number"
                                 value={formData.salePrice}
                                 onChange={handleChange('salePrice')}
-                                fullWidth
+                                autoComplete="off"
                             />
                         </div>
                         <div style={{ position: 'relative' }}>
@@ -316,10 +324,31 @@ export default function ProductForm({ product, collectionsData, onSubmit, onCanc
                                 type="number"
                                 value={formData.inventoryQuantity}
                                 onChange={handleChange('inventoryQuantity')}
-                                fullWidth
+                                disabled={!trackQuantity}
                                 helpText="Enter the inventory quantity"
+                                error={trackQuantityError}
+                                autoComplete="off"
                             />
                         </div>
+                        <div style={{ position: 'relative' }}>
+                            <Checkbox
+                                label="Track Quantity"
+                                checked={trackQuantity}
+                                onChange={handleTrackQuantityChange}
+                                error={trackQuantityError}
+                            />
+                        </div>
+                        {/* <div style={{ position: 'relative' }}>
+                            <TextField
+                                label="SKU"
+                                type="text"
+                                value={formData.sku}
+                                onChange={handleChange('sku')}
+                                required={trackQuantity && parseInt(formData.inventoryQuantity) !== 0}
+                                error={skuError}
+                                autoComplete="off"
+                            />
+                        </div> */}
                     </div>
 
                     {/* Product Category Section */}

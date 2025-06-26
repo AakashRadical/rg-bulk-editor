@@ -1088,84 +1088,91 @@ app.put('/api/products/:id', async (req, res) => {
       });
     }
 
-    // Update SKUs using inventoryItemUpdate
-    const variantsWithSku = product.variants.filter(
-      variant => variant.inventory_management === 'shopify' && variant.sku && variant.inventory_item_id
+    // Update inventory tracking and SKU
+    const inventoryItemUpdateMutation = `
+      mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
+        inventoryItemUpdate(id: $id, input: $input) {
+          inventoryItem {
+            id
+            sku
+            tracked
+          }
+          userErrors {
+            field
+            message
+          }
+        }
+      }
+    `;
+
+    const variantsWithTrackingOrSku = product.variants.filter(
+      variant => variant.tracked !== undefined || (variant.inventory_management === 'shopify' && variant.sku && variant.inventory_item_id)
     );
 
-    if (variantsWithSku.length > 0) {
-      const inventoryItemUpdateMutation = `
-        mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
-          inventoryItemUpdate(id: $id, input: $input) {
-            inventoryItem {
-              id
-              sku
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
+    for (const variant of variantsWithTrackingOrSku) {
+      const inventoryItemId = variant.inventory_item_id
+        ? (variant.inventory_item_id.startsWith('gid://shopify/InventoryItem/')
+            ? variant.inventory_item_id
+            : `gid://shopify/InventoryItem/${variant.inventory_item_id}`)
+        : undefined;
 
-      for (const variant of variantsWithSku) {
-        const inventoryItemId = variant.inventory_item_id
-          ? (variant.inventory_item_id.startsWith('gid://shopify/InventoryItem/')
-              ? variant.inventory_item_id
-              : `gid://shopify/InventoryItem/${variant.inventory_item_id}`)
-          : undefined;
-
-        if (!inventoryItemId) {
-          console.warn('Skipping SKU update due to missing inventory item ID:', variant);
-          continue;
-        }
-
-        const inventoryItemInput = {
-          sku: variant.sku,
-        };
-
-        console.log('Inventory Item SKU Input:', JSON.stringify({ id: inventoryItemId, input: inventoryItemInput }, null, 2));
-
-        // Optional: Log existing SKU for debugging
-        try {
-          const existingSkuQuery = await client.request(`
-            query {
-              inventoryItem(id: "${inventoryItemId}") {
-                sku
-              }
-            }
-          `);
-          const existingSku = existingSkuQuery.data?.inventoryItem?.sku;
-          if (existingSku && existingSku !== variant.sku) {
-            console.warn(`Updating SKU from ${existingSku} to ${variant.sku} for inventory item: ${inventoryItemId}`);
-          }
-        } catch (e) {
-          console.warn('Failed to fetch existing SKU for logging:', e.message);
-        }
-
-        const inventoryItemUpdateResponse = await client.request(inventoryItemUpdateMutation, {
-          variables: {
-            id: inventoryItemId,
-            input: inventoryItemInput,
-          },
-        });
-
-        const { inventoryItemUpdate } = inventoryItemUpdateResponse.data;
-        if (
-          inventoryItemUpdate.userErrors &&
-          inventoryItemUpdate.userErrors.length > 0
-        ) {
-          console.error('SKU update errors:', inventoryItemUpdate.userErrors);
-          return res.status(400).json({
-            success: false,
-            error: 'Failed to update variant SKU',
-            details: inventoryItemUpdate.userErrors,
-          });
-        }
-
-        console.log('SKU updated successfully for inventory item:', inventoryItemId);
+      if (!inventoryItemId) {
+        console.warn('Skipping tracking/SKU update due to missing inventory item ID:', variant);
+        continue;
       }
+
+      const inventoryItemInput = {
+        tracked: variant.tracked !== undefined ? variant.tracked : undefined,
+        sku: variant.sku || undefined,
+      };
+
+      // Only include defined fields in the input
+      const filteredInventoryItemInput = Object.fromEntries(
+        Object.entries(inventoryItemInput).filter(([_, value]) => value !== undefined)
+      );
+
+      console.log('Inventory Item Input:', JSON.stringify({ id: inventoryItemId, input: filteredInventoryItemInput }, null, 2));
+
+      // Log existing SKU and tracking status for debugging
+      try {
+        const existingItemQuery = await client.request(`
+          query {
+            inventoryItem(id: "${inventoryItemId}") {
+              sku
+              tracked
+            }
+          }
+        `);
+        const existingSku = existingItemQuery.data?.inventoryItem?.sku;
+        const existingTracked = existingItemQuery.data?.inventoryItem?.tracked;
+        if (existingSku !== variant.sku || existingTracked !== variant.tracked) {
+          console.log(`Updating inventory item ${inventoryItemId}: SKU from ${existingSku} to ${variant.sku}, tracked from ${existingTracked} to ${variant.tracked}`);
+        }
+      } catch (e) {
+        console.warn('Failed to fetch existing inventory item for logging:', e.message);
+      }
+
+      const inventoryItemUpdateResponse = await client.request(inventoryItemUpdateMutation, {
+        variables: {
+          id: inventoryItemId,
+          input: filteredInventoryItemInput,
+        },
+      });
+
+      const { inventoryItemUpdate } = inventoryItemUpdateResponse.data;
+      if (
+        inventoryItemUpdate.userErrors &&
+        inventoryItemUpdate.userErrors.length > 0
+      ) {
+        console.error('Inventory item update errors:', inventoryItemUpdate.userErrors);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to update inventory item',
+          details: inventoryItemUpdate.userErrors,
+        });
+      }
+
+      console.log('Inventory item updated successfully:', inventoryItemId);
     }
 
     // Handle inventory updates
@@ -1195,21 +1202,6 @@ app.put('/api/products/:id', async (req, res) => {
     console.log('Inventory Updates:', JSON.stringify(inventoryUpdates, null, 2));
 
     if (inventoryUpdates.length > 0) {
-      const inventoryItemUpdateMutation = `
-        mutation inventoryItemUpdate($id: ID!, $input: InventoryItemInput!) {
-          inventoryItemUpdate(id: $id, input: $input) {
-            inventoryItem {
-              id
-              tracked
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `;
-
       const inventorySetMutation = `
         mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
           inventorySetOnHandQuantities(input: $input) {
@@ -1235,7 +1227,7 @@ app.put('/api/products/:id', async (req, res) => {
           continue;
         }
 
-        // Check if inventory tracking is enabled and inventory level exists
+        // Check if inventory level exists
         const itemData = await client.request(`
           query {
             inventoryItem(id: "${update.inventoryItemId}") {
@@ -1260,29 +1252,6 @@ app.put('/api/products/:id', async (req, res) => {
             error: 'Inventory item not found',
             details: { inventoryItemId: update.inventoryItemId },
           });
-        }
-
-        // Enable inventory tracking if disabled
-        if (!inventoryItem.tracked) {
-          console.log(`Enabling inventory tracking for item: ${update.inventoryItemId}`);
-          const enableTrackingResponse = await client.request(inventoryItemUpdateMutation, {
-            variables: {
-              id: update.inventoryItemId,
-              input: { tracked: true },
-            },
-          });
-
-          const { inventoryItemUpdate } = enableTrackingResponse.data;
-          if (inventoryItemUpdate.userErrors && inventoryItemUpdate.userErrors.length > 0) {
-            console.error('Failed to enable inventory tracking:', inventoryItemUpdate.userErrors);
-            return res.status(400).json({
-              success: false,
-              error: 'Failed to enable inventory tracking',
-              details: inventoryItemUpdate.userErrors,
-            });
-          }
-
-          console.log(`Inventory tracking enabled for item: ${update.inventoryItemId}`);
         }
 
         // Activate inventory level if it doesn't exist
@@ -1447,8 +1416,7 @@ app.put('/api/products/:id', async (req, res) => {
       details: error.response?.body?.errors || error.message,
     });
   }
-});  
-
+});
 
 // Create product
 
